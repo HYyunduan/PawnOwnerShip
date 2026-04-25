@@ -39,8 +39,8 @@ namespace PawnOwnership
         // 归属字典（简化版，不区分类型）
         // ==========================================
         
-        // Thing 归属：key = thingIDNumber
-        private Dictionary<int, string> thingOwnership = new Dictionary<int, string>();
+        // Thing 归属：key = ThingID (def.defName + thingIDNumber)
+        private Dictionary<string, string> thingOwnership = new Dictionary<string, string>();
         
         // Cell 归属：key = "x_z"
         private Dictionary<string, string> cellOwnership = new Dictionary<string, string>();
@@ -52,20 +52,33 @@ namespace PawnOwnership
         // Thing 归属
         // ==========================================
         
-        public void SetOwner(int thingId, string playerId)
+        public void SetOwner(Thing thing, string playerId)
         {
-            thingOwnership[thingId] = playerId;
-            DebugLog($"[PawnOwnership] SetOwner: Thing_{thingId} -> {playerId}");
+            if (thing == null) return;
+            thingOwnership[thing.ThingID] = playerId;
+            DebugLog($"[PawnOwnership] SetOwner: {thing.ThingID} -> {playerId}");
         }
         
-        public string GetOwner(int thingId)
+        public void SetOwner(string thingID, string playerId)
         {
-            return thingOwnership.TryGetValue(thingId, out string owner) ? owner : null;
+            thingOwnership[thingID] = playerId;
+            DebugLog($"[PawnOwnership] SetOwner: {thingID} -> {playerId}");
         }
         
-        public void RemoveOwner(int thingId)
+        public string GetOwner(Thing thing)
         {
-            thingOwnership.Remove(thingId);
+            if (thing == null) return null;
+            return thingOwnership.TryGetValue(thing.ThingID, out string owner) ? owner : null;
+        }
+        
+        public string GetOwner(string thingID)
+        {
+            return thingOwnership.TryGetValue(thingID, out string owner) ? owner : null;
+        }
+        
+        public void RemoveOwner(string thingID)
+        {
+            thingOwnership.Remove(thingID);
         }
         
         // ==========================================
@@ -141,7 +154,8 @@ namespace PawnOwnership
         {
             public string type;      // "Thing", "Cell", "Zone"
             public int mapId;
-            public int thingId;      // Thing ID 或 Zone ID
+            public string thingID;   // ThingID 字符串（仅 Thing 类型使用）
+            public int zoneId;       // Zone ID（仅 Zone 类型使用）
             public int cellX;        // Cell X 坐标（仅 Cell 类型使用）
             public int cellZ;        // Cell Z 坐标（仅 Cell 类型使用）
             public string playerName;
@@ -150,16 +164,16 @@ namespace PawnOwnership
         /// <summary>
         /// 添加延迟同步消息到队列（Thing 版）
         /// </summary>
-        public static void QueueSyncMessageThing(int mapId, int thingId, string playerName)
+        public static void QueueSyncMessageThing(int mapId, Thing thing, string playerName)
         {
             syncQueue.Enqueue(new DelayedSyncMessage
             {
                 type = "Thing",
                 mapId = mapId,
-                thingId = thingId,
+                thingID = thing.ThingID,
                 playerName = playerName
             });
-            DebugLog($"[PawnOwnership] Queued sync: Thing_{thingId} -> {playerName}");
+            DebugLog($"[PawnOwnership] Queued sync: {thing.ThingID} -> {playerName}");
         }
         
         /// <summary>
@@ -187,7 +201,7 @@ namespace PawnOwnership
             {
                 type = "Zone",
                 mapId = mapId,
-                thingId = zoneId,
+                zoneId = zoneId,
                 playerName = playerName
             });
             DebugLog($"[PawnOwnership] Queued sync: Zone_{zoneId} -> {playerName}");
@@ -211,16 +225,16 @@ namespace PawnOwnership
                 switch (msg.type)
                 {
                     case "Thing":
-                        comp.SyncSetOwner(msg.thingId, msg.playerName);
-                        DebugLog($"[PawnOwnership] Processed sync: Thing_{msg.thingId} -> {msg.playerName}");
+                        comp.SyncSetOwner(msg.thingID, msg.playerName);
+                        DebugLog($"[PawnOwnership] Processed sync: {msg.thingID} -> {msg.playerName}");
                         break;
                     case "Cell":
                         comp.SyncSetOwnerCell(msg.cellX, msg.cellZ, msg.playerName);
                         DebugLog($"[PawnOwnership] Processed sync: Cell_{msg.cellX}_{msg.cellZ} -> {msg.playerName}");
                         break;
                     case "Zone":
-                        comp.SyncSetOwnerZone(msg.thingId, msg.playerName);
-                        DebugLog($"[PawnOwnership] Processed sync: Zone_{msg.thingId} -> {msg.playerName}");
+                        comp.SyncSetOwnerZone(msg.zoneId, msg.playerName);
+                        DebugLog($"[PawnOwnership] Processed sync: Zone_{msg.zoneId} -> {msg.playerName}");
                         break;
                 }
             }
@@ -248,9 +262,9 @@ namespace PawnOwnership
         // ==========================================
         
         [SyncMethod]
-        public void SyncSetOwner(int thingId, string playerName)
+        public void SyncSetOwner(string thingID, string playerName)
         {
-            SetOwner(thingId, playerName);
+            SetOwner(thingID, playerName);
         }
         
         [SyncMethod]
@@ -270,18 +284,17 @@ namespace PawnOwnership
         // ==========================================
         
         [SyncMethod]
-        public static void SyncSetPawnOwner(int mapId, int pawnId, string ownerName)
+        public static void SyncSetPawnOwner(int mapId, string pawnThingID, string ownerName)
         {
             Map targetMap = Find.Maps.FirstOrDefault(m => m.uniqueID == mapId);
             if (targetMap == null) return;
-            
-            Pawn pawn = targetMap.mapPawns.AllPawns.FirstOrDefault(p => p.thingIDNumber == pawnId);
-            if (pawn != null)
-            {
-                SetOwner(pawnId, ownerName);
-                pawn.SetOwner(ownerName);
-                DebugLog($"[PawnOwnership] SyncSetPawnOwner: Pawn {pawnId} -> {ownerName}");
-            }
+            Pawn pawn = targetMap.mapPawns.AllPawns.FirstOrDefault(p => p.ThingID == pawnThingID);
+            if (pawn == null) return;
+            pawn.SetOwner(ownerName);
+            var comp = targetMap.GetComponent<MapComponent_PawnOwnership>();
+            if (comp == null) return;
+            comp.SetOwner(pawn, ownerName);
+            DebugLog($"[PawnOwnership] SyncSetPawnOwner: {pawnThingID} -> {ownerName}");
         }
 
         // ==========================================
@@ -293,7 +306,7 @@ namespace PawnOwnership
             // 绘制 Blueprint 归属
             foreach (var blueprint in map.listerThings.ThingsInGroup(ThingRequestGroup.Blueprint))
             {
-                string owner = GetOwner(blueprint.thingIDNumber);
+                string owner = GetOwner(blueprint);
                 if (!string.IsNullOrEmpty(owner))
                 {
                     DrawMarkerAt(blueprint.DrawPos, owner);
@@ -303,7 +316,7 @@ namespace PawnOwnership
             // 绘制 Frame 归属
             foreach (var frame in map.listerThings.ThingsInGroup(ThingRequestGroup.BuildingFrame))
             {
-                string owner = GetOwner(frame.thingIDNumber);
+                string owner = GetOwner(frame);
                 if (!string.IsNullOrEmpty(owner))
                 {
                     DrawMarkerAt(frame.DrawPos, owner);
@@ -349,7 +362,7 @@ namespace PawnOwnership
                         Thing targetThing = des.target.Thing;
                         if (targetThing == null) continue;
                         
-                        string owner = GetOwner(targetThing.thingIDNumber);
+                        string owner = GetOwner(targetThing);
                         if (!string.IsNullOrEmpty(owner))
                         {
                             Vector3 pos = des.DrawLoc();
@@ -396,7 +409,7 @@ namespace PawnOwnership
             Scribe_Collections.Look(ref cellOwnership, "cellOwnership", LookMode.Value, LookMode.Value);
             Scribe_Collections.Look(ref zoneOwnership, "zoneOwnership", LookMode.Value, LookMode.Value);
             
-            if (thingOwnership == null) thingOwnership = new Dictionary<int, string>();
+            if (thingOwnership == null) thingOwnership = new Dictionary<string, string>();
             if (cellOwnership == null) cellOwnership = new Dictionary<string, string>();
             if (zoneOwnership == null) zoneOwnership = new Dictionary<int, string>();
         }

@@ -134,8 +134,8 @@ namespace PawnOwnership
                     if (targetThing != null)
                     {
                         // 使用延迟同步队列
-                        MapComponent_PawnOwnership.QueueSyncMessageThing(mapId, targetThing.thingIDNumber, currentPlayer);
-                        DebugLog($"[PawnOwnership] AddDesignation (Thing): {newDes.def.defName} Thing_{targetThing.thingIDNumber} -> {currentPlayer}");
+                        MapComponent_PawnOwnership.QueueSyncMessageThing(mapId, targetThing, currentPlayer);
+                        DebugLog($"[PawnOwnership] AddDesignation (Thing): {newDes.def.defName} {targetThing.ThingID} -> {currentPlayer}");
                     }
                 }
             }
@@ -165,7 +165,7 @@ namespace PawnOwnership
                     Thing targetThing = des.target.Thing;
                     if (targetThing != null)
                     {
-                        comp.RemoveOwner(targetThing.thingIDNumber);
+                        comp.RemoveOwner(targetThing.ThingID);
                     }
                 }
             }
@@ -230,11 +230,11 @@ namespace PawnOwnership
                 var comp = __instance.Map?.GetComponent<MapComponent_PawnOwnership>();
                 if (comp == null) return;
                 
-                string owner = comp.GetOwner(__instance.thingIDNumber);
+                string owner = comp.GetOwner(__instance);
                 if (!string.IsNullOrEmpty(owner))
                 {
                     MapComponent_PawnOwnership.SavePendingOwnership(__instance.Position, owner);
-                    DebugLog($"[PawnOwnership] DeSpawn: 保存 {__instance.GetType().Name}_{__instance.thingIDNumber} 归属 {owner} 到暂存");
+                    DebugLog($"[PawnOwnership] DeSpawn: 保存 {__instance.GetType().Name}_{__instance.ThingID} 归属 {owner} 到暂存");
                 }
             }
         }
@@ -256,8 +256,8 @@ namespace PawnOwnership
                 string owner = MapComponent_PawnOwnership.GetAndClearPendingOwnership(__instance.Position);
                 if (!string.IsNullOrEmpty(owner))
                 {
-                    comp.SetOwner(__instance.thingIDNumber, owner);
-                    DebugLog($"[PawnOwnership] SpawnSetup: 从暂存恢复 {__instance.GetType().Name}_{__instance.thingIDNumber} 归属 {owner}");
+                    comp.SetOwner(__instance, owner);
+                    DebugLog($"[PawnOwnership] SpawnSetup: 从暂存恢复 {__instance.GetType().Name}_{__instance.ThingID} 归属 {owner}");
                 }
             }
         }
@@ -281,14 +281,14 @@ namespace PawnOwnership
                 var comp = pawn.Map?.GetComponent<MapComponent_PawnOwnership>();
                 if (comp == null) return;
                 
-                string blueprintOwner = comp.GetOwner(t.thingIDNumber);
+                string blueprintOwner = comp.GetOwner(t);
                 string pawnOwner = pawn.GetOwner();
                 
                 // 如果 Blueprint/Frame 有所有权且不属于当前小人，阻止
                 if (!string.IsNullOrEmpty(blueprintOwner) && blueprintOwner != pawnOwner)
                 {
                     __result = false;
-                    DebugLog($"[PawnOwnership-IsNewValidNearbyNeeder] 阻止 {pawnOwner} 的小人搬运 {t.GetType().Name}_{t.thingIDNumber}，所有权属于 {blueprintOwner}");
+                    DebugLog($"[PawnOwnership-IsNewValidNearbyNeeder] 阻止 {pawnOwner} 的小人搬运 {t.GetType().Name}_{t.ThingID}，所有权属于 {blueprintOwner}");
                 }
             }
         }
@@ -320,8 +320,8 @@ namespace PawnOwnership
                 }
                 
                 string currentPlayer = MapComponent_PawnOwnership.GetCurrentPlayer();
-                MapComponent_PawnOwnership.QueueSyncMessageThing(__instance.Map.uniqueID, blueprint.thingIDNumber, currentPlayer);
-                DebugLog($"[PawnOwnership] Designator_Build: Blueprint_{blueprint.thingIDNumber} 加入队列 -> {currentPlayer}");
+                MapComponent_PawnOwnership.QueueSyncMessageThing(__instance.Map.uniqueID, blueprint, currentPlayer);
+                DebugLog($"[PawnOwnership] Designator_Build: {blueprint.ThingID} 加入队列 -> {currentPlayer}");
             }
         }
         
@@ -352,6 +352,198 @@ namespace PawnOwnership
             static void Postfix()
             {
                 MapComponent_PawnOwnership.ProcessSyncQueue();
+            }
+        }
+        
+        // ==========================================
+        // 需求一：物品归属变化逻辑
+        // ==========================================
+        
+        // 方案 A：DoLeavingsFor 归属继承（销毁产出）
+        private static string pendingLeavingsOwner = null;
+        
+        [HarmonyPatch(typeof(GenLeaving), nameof(GenLeaving.DoLeavingsFor))]
+        static class Patch_GenLeaving_DoLeavingsFor
+        {
+            // Prefix: 保存老物品归属
+            static void Prefix(Thing diedThing)
+            {
+                pendingLeavingsOwner = null;
+                if (diedThing == null) return;
+                
+                var comp = diedThing.Map?.GetComponent<MapComponent_PawnOwnership>();
+                pendingLeavingsOwner = comp?.GetOwner(diedThing);
+                
+                if (!string.IsNullOrEmpty(pendingLeavingsOwner))
+                {
+                    DebugLog($"[PawnOwnership-DoLeavingsFor] 保存 {diedThing.ThingID} 归属 -> {pendingLeavingsOwner}");
+                }
+            }
+            
+            // Postfix: 将归属应用到产出的物品
+            static void Postfix(Thing diedThing, Map map)
+            {
+                if (string.IsNullOrEmpty(pendingLeavingsOwner)) return;
+                
+                var comp = map?.GetComponent<MapComponent_PawnOwnership>();
+                if (comp == null) return;
+                
+                // 查找刚生成的遗留物（通过位置查找）
+                if (diedThing != null)
+                {
+                    IntVec3 pos = diedThing.Position;
+                    int count = 0;
+                    
+                    foreach (var thing in map.thingGrid.ThingsAt(pos))
+                    {
+                        // 跳过原来的物品（如果还在）
+                        if (thing == diedThing) continue;
+                        
+                        comp.SetOwner(thing, pendingLeavingsOwner);
+                        count++;
+                        DebugLog($"[PawnOwnership-DoLeavingsFor] 继承归属: {thing.ThingID} -> {pendingLeavingsOwner}");
+                    }
+                    
+                    if (count > 0)
+                    {
+                        DebugLog($"[PawnOwnership-DoLeavingsFor] 共 {count} 个物品继承归属");
+                    }
+                }
+                
+                pendingLeavingsOwner = null;
+            }
+        }
+        
+        // 方案 B：工作者栈兜底（工作产出）
+        private static Stack<Pawn> currentWorkDoer = new Stack<Pawn>();
+        
+        // 工作开始
+        [HarmonyPatch(typeof(Pawn_JobTracker), "StartJob")]
+        static class Patch_StartJob
+        {
+            static void Postfix(Pawn_JobTracker __instance, Job newJob)
+            {
+                var pawn = Traverse.Create(__instance).Field<Pawn>("pawn").Value;
+                if (pawn == null || newJob == null) return;
+                
+                if (IsProductiveJob(newJob))
+                {
+                    currentWorkDoer.Push(pawn);
+                    DebugLog($"[PawnOwnership-WorkerStack] StartJob: {pawn.Name} 开始工作 {newJob.def.defName}，栈深度: {currentWorkDoer.Count}");
+                }
+            }
+            
+            static bool IsProductiveJob(Job job)
+            {
+                return job.def == JobDefOf.Mine ||
+                       job.def == JobDefOf.DoBill ||
+                       job.def == JobDefOf.Milk ||
+                       job.def == JobDefOf.Shear ||
+                       job.def == JobDefOf.Slaughter;
+            }
+        }
+        
+        // 工作结束
+        [HarmonyPatch(typeof(Pawn_JobTracker), "EndCurrentJob")]
+        static class Patch_EndJob
+        {
+            static void Postfix(Pawn_JobTracker __instance)
+            {
+                var pawn = Traverse.Create(__instance).Field<Pawn>("pawn").Value;
+                if (pawn == null) return;
+                
+                if (currentWorkDoer.Count > 0 && currentWorkDoer.Peek() == pawn)
+                {
+                    currentWorkDoer.Pop();
+                    DebugLog($"[PawnOwnership-WorkerStack] EndJob: {pawn.Name} 结束工作，栈深度: {currentWorkDoer.Count}");
+                }
+            }
+        }
+        
+        // SpawnSetup 工作者兜底
+        [HarmonyPatch(typeof(Thing), nameof(Thing.SpawnSetup))]
+        static class Patch_SpawnSetup_WorkerFallback
+        {
+            static void Postfix(Thing __instance, Map map, bool respawningAfterLoad)
+            {
+                if (__instance == null || map == null) return;
+                if (respawningAfterLoad) return;
+                
+                // 跳过 Blueprint 和 Frame（已有专门处理）
+                if (__instance is Blueprint || __instance is Frame) return;
+                
+                var comp = map.GetComponent<MapComponent_PawnOwnership>();
+                if (comp == null) return;
+                
+                // 已有归属？跳过（DoLeavingsFor 已处理）
+                if (!string.IsNullOrEmpty(comp.GetOwner(__instance))) return;
+                
+                // 工作者兜底
+                if (currentWorkDoer.Count > 0)
+                {
+                    Pawn worker = currentWorkDoer.Peek();
+                    string owner = worker.GetOwner();
+                    
+                    if (!string.IsNullOrEmpty(owner))
+                    {
+                        comp.SetOwner(__instance, owner);
+                        DebugLog($"[PawnOwnership-WorkerFallback] {__instance.ThingID} 继承工作者归属 -> {owner}");
+                    }
+                }
+            }
+        }
+        
+        // ==========================================
+        // 需求三：Pawn 进入地图时同步携带物品归属
+        // ==========================================
+        
+        [HarmonyPatch(typeof(Pawn), nameof(Pawn.SpawnSetup))]
+        static class Patch_Pawn_SpawnSetup_OwnershipSync
+        {
+            static void Postfix(Pawn __instance, Map map, bool respawningAfterLoad)
+            {
+                if (__instance == null || map == null) return;
+                if (respawningAfterLoad) return;
+                
+                string pawnOwner = __instance.GetOwner();
+                if (string.IsNullOrEmpty(pawnOwner)) return;
+                
+                var mapComp = map.GetComponent<MapComponent_PawnOwnership>();
+                if (mapComp == null) return;
+                
+                int count = 0;
+                
+                // 背包物品
+                if (__instance.inventory != null)
+                {
+                    foreach (var thing in __instance.inventory.innerContainer)
+                    {
+                        mapComp.SetOwner(thing, pawnOwner);
+                        count++;
+                    }
+                }
+                
+                // 装备
+                if (__instance.equipment != null)
+                {
+                    foreach (var eq in __instance.equipment.AllEquipmentListForReading)
+                    {
+                        mapComp.SetOwner(eq, pawnOwner);
+                        count++;
+                    }
+                }
+                
+                // 搬运中的物品
+                if (__instance.carryTracker != null && __instance.carryTracker.CarriedThing != null)
+                {
+                    mapComp.SetOwner(__instance.carryTracker.CarriedThing, pawnOwner);
+                    count++;
+                }
+                
+                if (count > 0)
+                {
+                    DebugLog($"[PawnOwnership-PawnEnterMap] {__instance.Name?.ToString() ?? __instance.ThingID} 进入地图，设置 {count} 个携带物品归属 -> {pawnOwner}");
+                }
             }
         }
     }

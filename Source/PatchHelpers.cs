@@ -150,11 +150,11 @@ namespace PawnOwnership
             if (string.IsNullOrEmpty(pawnOwner)) return true;
             
             // 1. 检查 Thing 归属
-            string thingOwner = comp.GetOwner(t.thingIDNumber);
+            string thingOwner = comp.GetOwner(t);
             if (!string.IsNullOrEmpty(thingOwner) && thingOwner != pawnOwner)
             {
                 MapComponent_PawnOwnership.DebugLog(
-                    $"[PawnOwnership] 阻止 {pawnOwner} 的小人对 Thing_{t.thingIDNumber} 工作，归属: {thingOwner}");
+                    $"[PawnOwnership] 阻止 {pawnOwner} 的小人对 {t.ThingID} 工作，归属: {thingOwner}");
                 return false;
             }
             // 2. 检查格子归属

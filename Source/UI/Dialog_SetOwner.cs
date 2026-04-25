@@ -123,7 +123,7 @@ namespace PawnOwnership
 
         private void SetOwner(string ownerName)
         {
-            MapComponent_PawnOwnership.SyncSetPawnOwner(Find.CurrentMap.uniqueID, pawn.thingIDNumber, ownerName);
+            MapComponent_PawnOwnership.SyncSetPawnOwner(Find.CurrentMap.uniqueID, pawn.ThingID, ownerName);
             this.Close();
         }
     }

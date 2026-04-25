@@ -1,5 +1,5 @@
 is_global = true
 build_property.RootNamespace = PawnOwnership
-build_property.ProjectDir = \\wsl.localhost\Ubuntu\home\hycloud\.openclaw\workspace\rimworld\PawnOwnership\Source\
+build_property.ProjectDir = /home/hycloud/.openclaw/workspace/rimworld/PawnOwnership/PawnOwnerShip/Source/
 build_property.EnableComHosting = 
 build_property.EnableGeneratedComInterfaceComImportInterop = 

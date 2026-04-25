@@ -415,24 +415,19 @@
     ]
   },
   "packageFolders": {
-    "C:\\Users\\HYcloud\\.nuget\\packages\\": {},
-    "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages": {}
+    "/home/hycloud/.nuget/packages/": {}
   },
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "\\\\wsl.localhost\\Ubuntu\\home\\hycloud\\.openclaw\\workspace\\rimworld\\PawnOwnership\\Source\\PawnOwnership.csproj",
+      "projectUniqueName": "/home/hycloud/.openclaw/workspace/rimworld/PawnOwnership/PawnOwnerShip/Source/PawnOwnership.csproj",
       "projectName": "PawnOwnership",
-      "projectPath": "\\\\wsl.localhost\\Ubuntu\\home\\hycloud\\.openclaw\\workspace\\rimworld\\PawnOwnership\\Source\\PawnOwnership.csproj",
-      "packagesPath": "C:\\Users\\HYcloud\\.nuget\\packages\\",
-      "outputPath": "\\\\wsl.localhost\\Ubuntu\\home\\hycloud\\.openclaw\\workspace\\rimworld\\PawnOwnership\\Source\\obj\\",
+      "projectPath": "/home/hycloud/.openclaw/workspace/rimworld/PawnOwnership/PawnOwnerShip/Source/PawnOwnership.csproj",
+      "packagesPath": "/home/hycloud/.nuget/packages/",
+      "outputPath": "/home/hycloud/.openclaw/workspace/rimworld/PawnOwnership/PawnOwnerShip/Source/obj/",
       "projectStyle": "PackageReference",
-      "fallbackFolders": [
-        "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
-      ],
       "configFilePaths": [
-        "C:\\Users\\HYcloud\\AppData\\Roaming\\NuGet\\NuGet.Config",
-        "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config"
+        "/home/hycloud/.nuget/NuGet/NuGet.Config"
       ],
       "originalTargetFrameworks": [
         "net472"
@@ -468,16 +463,8 @@
             "autoReferenced": true
           }
         },
-        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\8.0.420\\RuntimeIdentifierGraph.json"
+        "runtimeIdentifierGraphPath": "/home/hycloud/.dotnet/sdk/8.0.420/RuntimeIdentifierGraph.json"
       }
     }
-  },
-  "logs": [
-    {
-      "code": "NU1900",
-      "level": "Warning",
-      "warningLevel": 1,
-      "message": "获取包漏洞数据时出错: 无法加载源 https://api.nuget.org/v3/index.json 的服务索引。"
-    }
-  ]
+  }
 }

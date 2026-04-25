@@ -1,18 +1,11 @@
 {
   "version": 2,
-  "dgSpecHash": "L2xpKwLdbOM=",
+  "dgSpecHash": "kKX7GnS+0FI=",
   "success": true,
-  "projectFilePath": "\\\\wsl.localhost\\Ubuntu\\home\\hycloud\\.openclaw\\workspace\\rimworld\\PawnOwnership\\Source\\PawnOwnership.csproj",
+  "projectFilePath": "/home/hycloud/.openclaw/workspace/rimworld/PawnOwnership/PawnOwnerShip/Source/PawnOwnership.csproj",
   "expectedPackageFiles": [
-    "C:\\Users\\HYcloud\\.nuget\\packages\\microsoft.netframework.referenceassemblies\\1.0.3\\microsoft.netframework.referenceassemblies.1.0.3.nupkg.sha512",
-    "C:\\Users\\HYcloud\\.nuget\\packages\\microsoft.netframework.referenceassemblies.net472\\1.0.3\\microsoft.netframework.referenceassemblies.net472.1.0.3.nupkg.sha512"
+    "/home/hycloud/.nuget/packages/microsoft.netframework.referenceassemblies/1.0.3/microsoft.netframework.referenceassemblies.1.0.3.nupkg.sha512",
+    "/home/hycloud/.nuget/packages/microsoft.netframework.referenceassemblies.net472/1.0.3/microsoft.netframework.referenceassemblies.net472.1.0.3.nupkg.sha512"
   ],
-  "logs": [
-    {
-      "code": "NU1900",
-      "level": "Warning",
-      "warningLevel": 1,
-      "message": "获取包漏洞数据时出错: 无法加载源 https://api.nuget.org/v3/index.json 的服务索引。"
-    }
-  ]
+  "logs": []
 }

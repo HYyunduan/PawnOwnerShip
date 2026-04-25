@@ -46,11 +46,11 @@ namespace PawnOwnership
                 var comp = map.GetComponent<MapComponent_PawnOwnership>();
                 
                 string playerName = MapComponent_PawnOwnership.GetCurrentPlayer();
-                int testThingId = 99999;
+                string testThingID = "TestThing_99999";
                 
-                comp.SyncSetOwner(testThingId, playerName);
+                comp.SyncSetOwner(testThingID, playerName);
                 
-                Log.Message($"[TestSyncUI] 已调用 SyncSetOwner({testThingId}, {playerName})");
+                Log.Message($"[TestSyncUI] 已调用 SyncSetOwner({testThingID}, {playerName})");
             }
             else
             {
