@@ -1,0 +1,62 @@
+{
+  "format": 1,
+  "restore": {
+    "\\\\wsl.localhost\\Ubuntu\\home\\hycloud\\.openclaw\\workspace\\rimworld\\PawnOwnership\\Source\\PawnOwnership.csproj": {}
+  },
+  "projects": {
+    "\\\\wsl.localhost\\Ubuntu\\home\\hycloud\\.openclaw\\workspace\\rimworld\\PawnOwnership\\Source\\PawnOwnership.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "\\\\wsl.localhost\\Ubuntu\\home\\hycloud\\.openclaw\\workspace\\rimworld\\PawnOwnership\\Source\\PawnOwnership.csproj",
+        "projectName": "PawnOwnership",
+        "projectPath": "\\\\wsl.localhost\\Ubuntu\\home\\hycloud\\.openclaw\\workspace\\rimworld\\PawnOwnership\\Source\\PawnOwnership.csproj",
+        "packagesPath": "C:\\Users\\HYcloud\\.nuget\\packages\\",
+        "outputPath": "\\\\wsl.localhost\\Ubuntu\\home\\hycloud\\.openclaw\\workspace\\rimworld\\PawnOwnership\\Source\\obj\\",
+        "projectStyle": "PackageReference",
+        "fallbackFolders": [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
+        ],
+        "configFilePaths": [
+          "C:\\Users\\HYcloud\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config"
+        ],
+        "originalTargetFrameworks": [
+          "net472"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net472": {
+            "targetAlias": "net472",
+            "projectReferences": {}
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        }
+      },
+      "frameworks": {
+        "net472": {
+          "targetAlias": "net472",
+          "dependencies": {
+            "Microsoft.NETFramework.ReferenceAssemblies": {
+              "suppressParent": "All",
+              "target": "Package",
+              "version": "[1.0.3, )",
+              "autoReferenced": true
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\8.0.420\\RuntimeIdentifierGraph.json"
+        }
+      }
+    }
+  }
+}
