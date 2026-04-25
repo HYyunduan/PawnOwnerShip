@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ModMetaData>
+  <name>殖民者所有权</name>
+  <author>omas</author>
+  <packageId>omas.PawnOwnership</packageId>
+  <description>允许将殖民者指派给不同玩家，并限制其工作范围。</description>
+  <supportedVersions>
+    <li>1.6</li>
+  </supportedVersions>
+  <modDependencies>
+    <li>
+      <packageId>rwmt.multiplayer</packageId>
+      <displayName>Multiplayer</displayName>
+      <steamWorkshopUrl>steam://url/CommunityFilePage/2606448745</steamWorkshopUrl>
+    </li>
+  </modDependencies>
+</ModMetaData>
