@@ -21,6 +21,24 @@ namespace PawnOwnership
         private static HashSet<int> _pawnThingsFilterSet = new HashSet<int>();
         private static HashSet<int> _pawnCellsFilterSet = new HashSet<int>();
         
+        // 连锁挖矿归属传递
+        private static string _currentMiningOwner = null;
+        
+        public static void SetMiningOwner(string owner)
+        {
+            _currentMiningOwner = owner;
+        }
+        
+        public static void ClearMiningOwner()
+        {
+            _currentMiningOwner = null;
+        }
+        
+        public static string GetCurrentMiningOwner()
+        {
+            return _currentMiningOwner;
+        }
+        
         // ==========================================
         // JobOnThing Prefix
         // ==========================================
@@ -292,13 +310,7 @@ namespace PawnOwnership
                     return __result;
                 
                 var resultList = __result.ToList();
-                var filtered = resultList.Where(thing => IsThingAccessible(pawn, thing, comp, pawnOwner)).ToList();
-                
-                // 调试日志（始终打印）
-                MapComponent_PawnOwnership.DebugLog(
-                    $"[PawnOwnership] PotentialWorkThingsGlobal: {pawn.Name} 原始 {resultList.Count} 个物品，过滤后 {filtered.Count} 个");
-                
-                return filtered;
+                return resultList.Where(thing => IsThingAccessible(pawn, thing, comp, pawnOwner)).ToList();
             }
             finally
             {
@@ -335,13 +347,7 @@ namespace PawnOwnership
                     return __result;
                 
                 var resultList = __result.ToList();
-                var filtered = resultList.Where(cell => IsCellAccessibleForCandidate(pawn, cell, comp, pawnOwner)).ToList();
-                
-                // 调试日志（始终打印）
-                MapComponent_PawnOwnership.DebugLog(
-                    $"[PawnOwnership] PotentialWorkCellsGlobal: {pawn.Name} 原始 {resultList.Count} 个格子，过滤后 {filtered.Count} 个");
-                
-                return filtered;
+                return resultList.Where(cell => IsCellAccessibleForCandidate(pawn, cell, comp, pawnOwner)).ToList();
             }
             finally
             {
