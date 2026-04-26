@@ -362,7 +362,8 @@ namespace PawnOwnership
         // 方案 A：DoLeavingsFor 归属继承（销毁产出）
         private static string pendingLeavingsOwner = null;
         
-        [HarmonyPatch(typeof(GenLeaving), nameof(GenLeaving.DoLeavingsFor))]
+        [HarmonyPatch(typeof(GenLeaving), nameof(GenLeaving.DoLeavingsFor), 
+            new Type[] { typeof(Thing), typeof(Map), typeof(IntVec3), typeof(Rot4), typeof(bool) })]
         static class Patch_GenLeaving_DoLeavingsFor
         {
             // Prefix: 保存老物品归属
@@ -381,7 +382,7 @@ namespace PawnOwnership
             }
             
             // Postfix: 将归属应用到产出的物品
-            static void Postfix(Thing diedThing, Map map)
+            static void Postfix(Thing diedThing, Map map, IntVec3 pos)
             {
                 if (string.IsNullOrEmpty(pendingLeavingsOwner)) return;
                 
@@ -389,25 +390,21 @@ namespace PawnOwnership
                 if (comp == null) return;
                 
                 // 查找刚生成的遗留物（通过位置查找）
-                if (diedThing != null)
+                int count = 0;
+                
+                foreach (var thing in map.thingGrid.ThingsAt(pos))
                 {
-                    IntVec3 pos = diedThing.Position;
-                    int count = 0;
+                    // 跳过原来的物品（如果还在）
+                    if (thing == diedThing) continue;
                     
-                    foreach (var thing in map.thingGrid.ThingsAt(pos))
-                    {
-                        // 跳过原来的物品（如果还在）
-                        if (thing == diedThing) continue;
-                        
-                        comp.SetOwner(thing, pendingLeavingsOwner);
-                        count++;
-                        DebugLog($"[PawnOwnership-DoLeavingsFor] 继承归属: {thing.ThingID} -> {pendingLeavingsOwner}");
-                    }
-                    
-                    if (count > 0)
-                    {
-                        DebugLog($"[PawnOwnership-DoLeavingsFor] 共 {count} 个物品继承归属");
-                    }
+                    comp.SetOwner(thing, pendingLeavingsOwner);
+                    count++;
+                    DebugLog($"[PawnOwnership-DoLeavingsFor] 继承归属: {thing.ThingID} -> {pendingLeavingsOwner}");
+                }
+                
+                if (count > 0)
+                {
+                    DebugLog($"[PawnOwnership-DoLeavingsFor] 共 {count} 个物品继承归属");
                 }
                 
                 pendingLeavingsOwner = null;
