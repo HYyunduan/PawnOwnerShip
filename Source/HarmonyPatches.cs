@@ -6,6 +6,7 @@ using Verse.AI;
 using HarmonyLib;
 using RimWorld;
 using UnityEngine;
+using Multiplayer.API;
 
 namespace PawnOwnership
 {
@@ -41,6 +42,11 @@ namespace PawnOwnership
                             new[] { typeof(Pawn), typeof(Thing), typeof(bool) },
                             typeof(PatchHelpers), "JobOnThing_Prefix");
                         
+                        // JobOnThing Postfix - 检查搬运目标区域归属
+                        patchCount += PatchMethodIfExists(type, "JobOnThing", 
+                            new[] { typeof(Pawn), typeof(Thing), typeof(bool) },
+                            typeof(PatchHelpers), "JobOnThing_Postfix", postfix: true);
+                        
                         patchCount += PatchMethodIfExists(type, "HasJobOnThing", 
                             new[] { typeof(Pawn), typeof(Thing), typeof(bool) },
                             typeof(PatchHelpers), "HasJobOnThing_Prefix");
@@ -52,6 +58,22 @@ namespace PawnOwnership
                         patchCount += PatchMethodIfExists(type, "HasJobOnCell", 
                             new[] { typeof(Pawn), typeof(IntVec3), typeof(bool) },
                             typeof(PatchHelpers), "HasJobOnCell_Prefix");
+                        
+                        // 候选物品过滤 - PotentialWorkThingsGlobal（仅多人模式）
+                        if (MP.enabled)
+                        {
+                            patchCount += PatchMethodIfExists(type, "PotentialWorkThingsGlobal",
+                                new[] { typeof(Pawn) },
+                                typeof(PatchHelpers), "PotentialWorkThingsGlobal_Postfix", postfix: true);
+                        }
+                        
+                        // 候选格子过滤 - PotentialWorkCellsGlobal（仅多人模式）
+                        if (MP.enabled)
+                        {
+                            patchCount += PatchMethodIfExists(type, "PotentialWorkCellsGlobal",
+                                new[] { typeof(Pawn) },
+                                typeof(PatchHelpers), "PotentialWorkCellsGlobal_Postfix", postfix: true);
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -68,26 +90,34 @@ namespace PawnOwnership
         /// 返回：1 = 成功 patch，0 = 未 patch
         /// </summary>
         private static int PatchMethodIfExists(Type targetType, string methodName, 
-            Type[] paramTypes, Type patchClass, string patchMethodName)
+            Type[] paramTypes, Type patchClass, string patchMethodName, bool postfix = false)
         {
             try
             {
                 var method = targetType.GetMethod(methodName, paramTypes);
                 if (method == null) return 0;
                 
-                var prefixMethod = patchClass.GetMethod(patchMethodName, 
+                var patchMethod = patchClass.GetMethod(patchMethodName, 
                     BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
                 
-                if (prefixMethod == null)
+                if (patchMethod == null)
                 {
-                    Log.Warning($"[PawnOwnership] 找不到 Prefix 方法: {patchMethodName}");
+                    Log.Warning($"[PawnOwnership] 找不到 {(postfix ? "Postfix" : "Prefix")} 方法: {patchMethodName}");
                     return 0;
                 }
                 
-                var harmonyMethod = new HarmonyMethod(prefixMethod);
-                _harmony.Patch(method, prefix: harmonyMethod);
+                var harmonyMethod = new HarmonyMethod(patchMethod);
                 
-                DebugLog($"[PawnOwnership] Dynamic patch: {targetType.Name}.{methodName}");
+                if (postfix)
+                {
+                    _harmony.Patch(method, postfix: harmonyMethod);
+                }
+                else
+                {
+                    _harmony.Patch(method, prefix: harmonyMethod);
+                }
+                
+                DebugLog($"[PawnOwnership] Dynamic patch: {targetType.Name}.{methodName} ({(postfix ? "Postfix" : "Prefix")})");
                 return 1;
             }
             catch (Exception ex)
@@ -363,17 +393,19 @@ namespace PawnOwnership
         private static string pendingLeavingsOwner = null;
         
         [HarmonyPatch(typeof(GenLeaving), nameof(GenLeaving.DoLeavingsFor), 
-            new Type[] { typeof(Thing), typeof(Map), typeof(IntVec3), typeof(Rot4), typeof(bool) })]
+            new Type[] { typeof(Thing), typeof(Map), typeof(DestroyMode), typeof(CellRect), typeof(Predicate<IntVec3>), typeof(List<Thing>) })]
         static class Patch_GenLeaving_DoLeavingsFor
         {
             // Prefix: 保存老物品归属
-            static void Prefix(Thing diedThing)
+            static void Prefix(Thing diedThing, Map map, DestroyMode mode, CellRect leavingsRect, Predicate<IntVec3> nearPlaceValidator, List<Thing> listOfLeavingsOut)
             {
                 pendingLeavingsOwner = null;
-                if (diedThing == null) return;
+                if (diedThing == null || map == null) return;
                 
-                var comp = diedThing.Map?.GetComponent<MapComponent_PawnOwnership>();
-                pendingLeavingsOwner = comp?.GetOwner(diedThing);
+                var comp = map.GetComponent<MapComponent_PawnOwnership>();
+                if (comp == null) return;
+                
+                pendingLeavingsOwner = comp.GetOwner(diedThing);
                 
                 if (!string.IsNullOrEmpty(pendingLeavingsOwner))
                 {
@@ -382,30 +414,23 @@ namespace PawnOwnership
             }
             
             // Postfix: 将归属应用到产出的物品
-            static void Postfix(Thing diedThing, Map map, IntVec3 pos)
+            static void Postfix(Thing diedThing, Map map, DestroyMode mode, CellRect leavingsRect, Predicate<IntVec3> nearPlaceValidator, List<Thing> listOfLeavingsOut)
             {
                 if (string.IsNullOrEmpty(pendingLeavingsOwner)) return;
+                if (listOfLeavingsOut == null || listOfLeavingsOut.Count == 0) return;
                 
                 var comp = map?.GetComponent<MapComponent_PawnOwnership>();
                 if (comp == null) return;
                 
-                // 查找刚生成的遗留物（通过位置查找）
-                int count = 0;
-                
-                foreach (var thing in map.thingGrid.ThingsAt(pos))
+                // 直接从 listOfLeavingsOut 获取产出的物品
+                foreach (var thing in listOfLeavingsOut)
                 {
-                    // 跳过原来的物品（如果还在）
-                    if (thing == diedThing) continue;
-                    
+                    if (thing == null) continue;
                     comp.SetOwner(thing, pendingLeavingsOwner);
-                    count++;
                     DebugLog($"[PawnOwnership-DoLeavingsFor] 继承归属: {thing.ThingID} -> {pendingLeavingsOwner}");
                 }
                 
-                if (count > 0)
-                {
-                    DebugLog($"[PawnOwnership-DoLeavingsFor] 共 {count} 个物品继承归属");
-                }
+                DebugLog($"[PawnOwnership-DoLeavingsFor] 共 {listOfLeavingsOut.Count} 个物品继承归属");
                 
                 pendingLeavingsOwner = null;
             }
@@ -418,25 +443,13 @@ namespace PawnOwnership
         [HarmonyPatch(typeof(Pawn_JobTracker), "StartJob")]
         static class Patch_StartJob
         {
-            static void Postfix(Pawn_JobTracker __instance, Job newJob)
+            static void Postfix(Pawn_JobTracker __instance, Job newJob, JobCondition lastJobEndCondition, ThinkNode jobGiver, bool resumeCurJobAfterwards, bool cancelBusyStances, ThinkTreeDef thinkTree, JobTag? tag, bool fromQueue, bool canReturnCurJobToPool, bool? keepCarryingThingOverride, bool continueSleeping, bool addToJobsThisTick, bool preToilReservationsCanFail)
             {
                 var pawn = Traverse.Create(__instance).Field<Pawn>("pawn").Value;
                 if (pawn == null || newJob == null) return;
                 
-                if (IsProductiveJob(newJob))
-                {
-                    currentWorkDoer.Push(pawn);
-                    DebugLog($"[PawnOwnership-WorkerStack] StartJob: {pawn.Name} 开始工作 {newJob.def.defName}，栈深度: {currentWorkDoer.Count}");
-                }
-            }
-            
-            static bool IsProductiveJob(Job job)
-            {
-                return job.def == JobDefOf.Mine ||
-                       job.def == JobDefOf.DoBill ||
-                       job.def == JobDefOf.Milk ||
-                       job.def == JobDefOf.Shear ||
-                       job.def == JobDefOf.Slaughter;
+                currentWorkDoer.Push(pawn);
+                // DebugLog($"[PawnOwnership-WorkerStack] StartJob: {pawn.Name} 开始工作 {newJob.def.defName}，栈深度: {currentWorkDoer.Count}");
             }
         }
         
@@ -444,7 +457,7 @@ namespace PawnOwnership
         [HarmonyPatch(typeof(Pawn_JobTracker), "EndCurrentJob")]
         static class Patch_EndJob
         {
-            static void Postfix(Pawn_JobTracker __instance)
+            static void Postfix(Pawn_JobTracker __instance, JobCondition condition, bool startNewJob, bool canReturnToPool)
             {
                 var pawn = Traverse.Create(__instance).Field<Pawn>("pawn").Value;
                 if (pawn == null) return;
@@ -452,7 +465,7 @@ namespace PawnOwnership
                 if (currentWorkDoer.Count > 0 && currentWorkDoer.Peek() == pawn)
                 {
                     currentWorkDoer.Pop();
-                    DebugLog($"[PawnOwnership-WorkerStack] EndJob: {pawn.Name} 结束工作，栈深度: {currentWorkDoer.Count}");
+                    // DebugLog($"[PawnOwnership-WorkerStack] EndJob: {pawn.Name} 结束工作，栈深度: {currentWorkDoer.Count}");
                 }
             }
         }

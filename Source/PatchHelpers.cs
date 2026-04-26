@@ -1,12 +1,14 @@
 using System.Collections.Generic;
+using System.Linq;
 using Verse;
 using Verse.AI;
 using RimWorld;
+using Multiplayer.API;
 
 namespace PawnOwnership
 {
     /// <summary>
-    /// 统一的工作归属检查 Prefix 方法
+    /// 统一的工作归属检查方法
     /// </summary>
     public static class PatchHelpers
     {
@@ -211,6 +213,148 @@ namespace PawnOwnership
                         $"[PawnOwnership] 阻止 {pawnOwner} 的小人在 Zone_{zone.ID} 工作，归属: {zoneOwner}");
                     return false;
                 }
+            }
+            
+            return true;
+        }
+        
+        // ==========================================
+        // JobOnThing Postfix - 检查工作目标区域归属
+        // ==========================================
+        public static void JobOnThing_Postfix(Pawn pawn, ref Job __result)
+        {
+            if (__result == null) return;
+            if (pawn == null || pawn.Map == null) return;
+            
+            // 检查 targetB 是否有效
+            if (__result.targetB == null) return;
+            
+            IntVec3 destCell;
+            if (__result.targetB.HasThing)
+            {
+                destCell = __result.targetB.Thing.Position;
+            }
+            else
+            {
+                destCell = __result.targetB.Cell;
+            }
+            
+            var comp = pawn.Map.GetComponent<MapComponent_PawnOwnership>();
+            if (comp == null) return;
+            
+            string pawnOwner = pawn.GetOwner();
+            if (string.IsNullOrEmpty(pawnOwner)) return;
+            
+            // 检查目标区域归属
+            Zone destZone = pawn.Map.zoneManager.ZoneAt(destCell);
+            if (destZone != null)
+            {
+                string zoneOwner = comp.GetOwnerZone(destZone.ID);
+                if (!string.IsNullOrEmpty(zoneOwner) && zoneOwner != pawnOwner)
+                {
+                    MapComponent_PawnOwnership.DebugLog(
+                        $"[PawnOwnership] 阻止工作: {pawnOwner} 的小人不能在 Zone_{destZone.ID} 工作，归属: {zoneOwner}");
+                    __result = null;
+                }
+            }
+        }
+        
+        // ==========================================
+        // 候选物品过滤 - PotentialWorkThingsGlobal Postfix
+        // ==========================================
+        public static IEnumerable<Thing> PotentialWorkThingsGlobal_Postfix(
+            IEnumerable<Thing> __result, 
+            Pawn pawn)
+        {
+            // 单机模式跳过
+            if (!MP.enabled || !MP.IsInMultiplayer)
+                return __result;
+            
+            if (pawn == null || pawn.Map == null)
+                return __result;
+            
+            var comp = pawn.Map.GetComponent<MapComponent_PawnOwnership>();
+            if (comp == null)
+                return __result;
+            
+            string pawnOwner = pawn.GetOwner();
+            if (string.IsNullOrEmpty(pawnOwner))
+                return __result;
+            
+            return __result.Where(thing => IsThingAccessible(pawn, thing, comp, pawnOwner));
+        }
+        
+        // ==========================================
+        // 候选格子过滤 - PotentialWorkCellsGlobal Postfix
+        // ==========================================
+        public static IEnumerable<IntVec3> PotentialWorkCellsGlobal_Postfix(
+            IEnumerable<IntVec3> __result, 
+            Pawn pawn)
+        {
+            // 单机模式跳过
+            if (!MP.enabled || !MP.IsInMultiplayer)
+                return __result;
+            
+            if (pawn == null || pawn.Map == null)
+                return __result;
+            
+            var comp = pawn.Map.GetComponent<MapComponent_PawnOwnership>();
+            if (comp == null)
+                return __result;
+            
+            string pawnOwner = pawn.GetOwner();
+            if (string.IsNullOrEmpty(pawnOwner))
+                return __result;
+            
+            return __result.Where(cell => IsCellAccessibleForCandidate(pawn, cell, comp, pawnOwner));
+        }
+        
+        // ==========================================
+        // 候选物品可访问性检查
+        // ==========================================
+        private static bool IsThingAccessible(Pawn pawn, Thing thing, MapComponent_PawnOwnership comp, string pawnOwner)
+        {
+            if (thing == null) return false;
+            
+            // 1. 检查物品归属
+            string thingOwner = comp.GetOwner(thing);
+            if (!string.IsNullOrEmpty(thingOwner) && thingOwner != pawnOwner)
+                return false;
+            
+            // 2. 检查物品所在格子归属
+            string cellOwner = comp.GetOwnerCell(thing.Position.x, thing.Position.z);
+            if (!string.IsNullOrEmpty(cellOwner) && cellOwner != pawnOwner)
+                return false;
+            
+            // 3. 检查物品所在区域归属
+            Zone zone = pawn.Map.zoneManager.ZoneAt(thing.Position);
+            if (zone != null)
+            {
+                string zoneOwner = comp.GetOwnerZone(zone.ID);
+                if (!string.IsNullOrEmpty(zoneOwner) && zoneOwner != pawnOwner)
+                    return false;
+            }
+            
+            return true;
+        }
+        
+        // ==========================================
+        // 候选格子可访问性检查
+        // ==========================================
+        private static bool IsCellAccessibleForCandidate(Pawn pawn, IntVec3 cell, MapComponent_PawnOwnership comp, string pawnOwner)
+        {
+            // 1. 检查格子归属
+            string cellOwner = comp.GetOwnerCell(cell.x, cell.z);
+            if (!string.IsNullOrEmpty(cellOwner) && cellOwner != pawnOwner)
+                return false;
+            
+            // 2. 检查区域归属
+            Zone zone = pawn.Map.zoneManager.ZoneAt(cell);
+            if (zone != null)
+            {
+                string zoneOwner = comp.GetOwnerZone(zone.ID);
+                if (!string.IsNullOrEmpty(zoneOwner) && zoneOwner != pawnOwner)
+                    return false;
             }
             
             return true;

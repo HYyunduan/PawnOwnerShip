@@ -52,9 +52,35 @@ namespace PawnOwnership
         // Thing 归属
         // ==========================================
         
+        /// <summary>
+        /// 判断 Thing 是否应该追踪归属（白名单）
+        /// </summary>
+        public static bool ShouldTrackOwnership(Thing thing)
+        {
+            if (thing == null || thing.def == null) return false;
+            
+            // Item：物品、资源、装备等
+            if (thing.def.category == ThingCategory.Item) return true;
+            
+            // Building：建筑
+            if (thing is Building) return true;
+            
+            // Blueprint：蓝图
+            if (thing is Blueprint) return true;
+            
+            // Frame：建造框架
+            if (thing is Frame) return true;
+            
+            // Corpse：尸体
+            if (thing is Corpse) return true;
+            
+            return false;
+        }
+        
         public void SetOwner(Thing thing, string playerId)
         {
             if (thing == null) return;
+            if (!ShouldTrackOwnership(thing)) return;
             thingOwnership[thing.ThingID] = playerId;
             DebugLog($"[PawnOwnership] SetOwner: {thing.ThingID} -> {playerId}");
         }
@@ -320,6 +346,16 @@ namespace PawnOwnership
                 if (!string.IsNullOrEmpty(owner))
                 {
                     DrawMarkerAt(frame.DrawPos, owner);
+                }
+            }
+            
+            // 绘制可拾取物品归属
+            foreach (var thing in map.listerThings.ThingsInGroup(ThingRequestGroup.HaulableEver))
+            {
+                string owner = GetOwner(thing);
+                if (!string.IsNullOrEmpty(owner))
+                {
+                    DrawMarkerAt(thing.DrawPos, owner);
                 }
             }
             
