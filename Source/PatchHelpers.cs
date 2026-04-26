@@ -17,6 +17,10 @@ namespace PawnOwnership
         private static HashSet<(int pawnId, int thingId)> _thingCheckSet = new HashSet<(int, int)>();
         private static HashSet<(int pawnId, int cellX, int cellZ)> _cellCheckSet = new HashSet<(int, int, int)>();
         
+        // 候选过滤防重复检查
+        private static HashSet<int> _pawnThingsFilterSet = new HashSet<int>();
+        private static HashSet<int> _pawnCellsFilterSet = new HashSet<int>();
+        
         // ==========================================
         // JobOnThing Prefix
         // ==========================================
@@ -273,22 +277,33 @@ namespace PawnOwnership
             if (pawn == null || pawn.Map == null)
                 return __result;
             
-            var comp = pawn.Map.GetComponent<MapComponent_PawnOwnership>();
-            if (comp == null)
+            // 防重复检查
+            if (!_pawnThingsFilterSet.Add(pawn.thingIDNumber))
                 return __result;
             
-            string pawnOwner = pawn.GetOwner();
-            if (string.IsNullOrEmpty(pawnOwner))
-                return __result;
-            
-            var resultList = __result.ToList();
-            var filtered = resultList.Where(thing => IsThingAccessible(pawn, thing, comp, pawnOwner)).ToList();
-            
-            // 调试日志（始终打印）
-            MapComponent_PawnOwnership.DebugLog(
-                $"[PawnOwnership] PotentialWorkThingsGlobal: {pawn.Name} 原始 {resultList.Count} 个物品，过滤后 {filtered.Count} 个");
-            
-            return filtered;
+            try
+            {
+                var comp = pawn.Map.GetComponent<MapComponent_PawnOwnership>();
+                if (comp == null)
+                    return __result;
+                
+                string pawnOwner = pawn.GetOwner();
+                if (string.IsNullOrEmpty(pawnOwner))
+                    return __result;
+                
+                var resultList = __result.ToList();
+                var filtered = resultList.Where(thing => IsThingAccessible(pawn, thing, comp, pawnOwner)).ToList();
+                
+                // 调试日志（始终打印）
+                MapComponent_PawnOwnership.DebugLog(
+                    $"[PawnOwnership] PotentialWorkThingsGlobal: {pawn.Name} 原始 {resultList.Count} 个物品，过滤后 {filtered.Count} 个");
+                
+                return filtered;
+            }
+            finally
+            {
+                _pawnThingsFilterSet.Remove(pawn.thingIDNumber);
+            }
         }
         
         // ==========================================
@@ -305,15 +320,33 @@ namespace PawnOwnership
             if (pawn == null || pawn.Map == null)
                 return __result;
             
-            var comp = pawn.Map.GetComponent<MapComponent_PawnOwnership>();
-            if (comp == null)
+            // 防重复检查
+            if (!_pawnCellsFilterSet.Add(pawn.thingIDNumber))
                 return __result;
             
-            string pawnOwner = pawn.GetOwner();
-            if (string.IsNullOrEmpty(pawnOwner))
-                return __result;
-            
-            return __result.Where(cell => IsCellAccessibleForCandidate(pawn, cell, comp, pawnOwner));
+            try
+            {
+                var comp = pawn.Map.GetComponent<MapComponent_PawnOwnership>();
+                if (comp == null)
+                    return __result;
+                
+                string pawnOwner = pawn.GetOwner();
+                if (string.IsNullOrEmpty(pawnOwner))
+                    return __result;
+                
+                var resultList = __result.ToList();
+                var filtered = resultList.Where(cell => IsCellAccessibleForCandidate(pawn, cell, comp, pawnOwner)).ToList();
+                
+                // 调试日志（始终打印）
+                MapComponent_PawnOwnership.DebugLog(
+                    $"[PawnOwnership] PotentialWorkCellsGlobal: {pawn.Name} 原始 {resultList.Count} 个格子，过滤后 {filtered.Count} 个");
+                
+                return filtered;
+            }
+            finally
+            {
+                _pawnCellsFilterSet.Remove(pawn.thingIDNumber);
+            }
         }
         
         // ==========================================
