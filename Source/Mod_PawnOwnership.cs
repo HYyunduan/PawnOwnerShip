@@ -15,7 +15,7 @@ namespace PawnOwnership
             harmony.PatchAll();
             
             // 再注册动态 patch
-            HarmonyPatches.RegisterDynamicPatches(harmony);
+            HarmonyDynamicPatches.RegisterDynamicPatches(harmony);
             
             Log.Message("[PawnOwnership] Mod 初始化成功！");
         }
