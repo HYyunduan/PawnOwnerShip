@@ -141,22 +141,52 @@ namespace PawnOwnership
         {
             static void Postfix(DesignationManager __instance, Designation newDes)
             {
-                if (!MapComponent_PawnOwnership.ShouldProcessOwnership()) return;
                 if (newDes == null) return;
                 
                 var comp = __instance.map?.GetComponent<MapComponent_PawnOwnership>();
                 if (comp == null) return;
                 
-                string currentPlayer = MapComponent_PawnOwnership.GetCurrentPlayer();
                 int mapId = __instance.map.uniqueID;
+                
+                // 先读取临时归属（连锁挖矿时需要）
+                string miningOwner = PatchHelpers.GetCurrentMiningOwner();
+                
+                // 如果有临时归属，直接使用（绕过 ShouldProcessOwnership 检查）
+                if (!string.IsNullOrEmpty(miningOwner))
+                {
+                    // 检查是否是 Cell target（如采矿）
+                    if (!newDes.target.HasThing)
+                    {
+                        IntVec3 cell = newDes.target.Cell;
+                        MapComponent_PawnOwnership.QueueSyncMessageCell(mapId, cell.x, cell.z, miningOwner);
+                        Log.Message($"[PawnOwnership] AddDesignation (Cell, mining): {newDes.def.defName} at {cell} -> {miningOwner}");
+                    }
+                    else
+                    {
+                        Thing targetThing = newDes.target.Thing;
+                        if (targetThing != null)
+                        {
+                            MapComponent_PawnOwnership.QueueSyncMessageThing(mapId, targetThing, miningOwner);
+                            Log.Message($"[PawnOwnership] AddDesignation (Thing, mining): {newDes.def.defName} {targetThing.ThingID} -> {miningOwner}");
+                        }
+                    }
+                    return; // 处理完毕，直接返回
+                }
+                
+                // 没有临时归属，走正常流程
+                bool shouldProcess = MapComponent_PawnOwnership.ShouldProcessOwnership();
+                
+                if (!shouldProcess) return;
+                
+                string owner = MapComponent_PawnOwnership.GetCurrentPlayer();
                 
                 // 检查是否是 Cell target（如采矿）
                 if (!newDes.target.HasThing)
                 {
                     IntVec3 cell = newDes.target.Cell;
                     // 使用延迟同步队列
-                    MapComponent_PawnOwnership.QueueSyncMessageCell(mapId, cell.x, cell.z, currentPlayer);
-                    DebugLog($"[PawnOwnership] AddDesignation (Cell): {newDes.def.defName} at {cell} -> {currentPlayer}");
+                    MapComponent_PawnOwnership.QueueSyncMessageCell(mapId, cell.x, cell.z, owner);
+                    DebugLog($"[PawnOwnership] AddDesignation (Cell): {newDes.def.defName} at {cell} -> {owner}");
                 }
                 else
                 {
@@ -164,8 +194,8 @@ namespace PawnOwnership
                     if (targetThing != null)
                     {
                         // 使用延迟同步队列
-                        MapComponent_PawnOwnership.QueueSyncMessageThing(mapId, targetThing, currentPlayer);
-                        DebugLog($"[PawnOwnership] AddDesignation (Thing): {newDes.def.defName} {targetThing.ThingID} -> {currentPlayer}");
+                        MapComponent_PawnOwnership.QueueSyncMessageThing(mapId, targetThing, owner);
+                        DebugLog($"[PawnOwnership] AddDesignation (Thing): {newDes.def.defName} {targetThing.ThingID} -> {owner}");
                     }
                 }
             }
@@ -589,12 +619,59 @@ namespace PawnOwnership
                     if (!string.IsNullOrEmpty(zoneOwner) && zoneOwner != pawnOwner)
                     {
                         // 存储区不属于当前玩家，跳过
-                        DebugLog($"[PawnOwnership] 跳过存储区 Zone_{zone.ID}，归属: {zoneOwner}，小人: {pawnOwner}");
                         return false;
                     }
                 }
                 
                 return true;
+            }
+        }
+        
+        // ==========================================
+        // 连锁挖矿归属传递
+        // ==========================================
+        
+        // Patch JobDriver_Mine.DoDamage
+        // 在调用 FloodFillDesignations 前设置归属上下文，退出后清除
+        [HarmonyPatch(typeof(JobDriver_Mine), "DoDamage")]
+        static class Patch_JobDriver_Mine_DoDamage
+        {
+            static void Prefix(JobDriver_Mine __instance, Thing target, Toil mine, Pawn actor, IntVec3 mineablePos)
+            {
+                if (!MP.enabled || !MP.IsInMultiplayer)
+                    return;
+                
+                if (actor?.Map == null)
+                    return;
+                
+                // 检查是否是 MineVein 开采（会触发 FloodFillDesignations）
+                bool isVeinMining = actor.Map.designationManager?.DesignationAt(mineablePos, DesignationDefOf.MineVein) != null;
+                if (!isVeinMining)
+                    return;
+                
+                var comp = actor.Map.GetComponent<MapComponent_PawnOwnership>();
+                if (comp == null)
+                    return;
+                
+                // 优先获取 target（矿石）的归属，为空则获取 actor（小人）的归属
+                string owner = comp.GetOwnerCell(mineablePos.x, mineablePos.z);
+                if (string.IsNullOrEmpty(owner))
+                {
+                    owner = actor.GetOwner();
+                }
+                
+                if (!string.IsNullOrEmpty(owner))
+                {
+                    PatchHelpers.SetMiningOwner(owner);
+                    DebugLog($"[PawnOwnership] DoDamage 设置归属: {owner}");
+                }
+            }
+            
+            static void Postfix()
+            {
+                // 清除归属上下文
+                PatchHelpers.ClearMiningOwner();
+                DebugLog($"[PawnOwnership] DoDamage 清除归属");
             }
         }
     }
