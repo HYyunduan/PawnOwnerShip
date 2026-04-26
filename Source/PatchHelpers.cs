@@ -281,7 +281,14 @@ namespace PawnOwnership
             if (string.IsNullOrEmpty(pawnOwner))
                 return __result;
             
-            return __result.Where(thing => IsThingAccessible(pawn, thing, comp, pawnOwner));
+            var resultList = __result.ToList();
+            var filtered = resultList.Where(thing => IsThingAccessible(pawn, thing, comp, pawnOwner)).ToList();
+            
+            // 调试日志（始终打印）
+            MapComponent_PawnOwnership.DebugLog(
+                $"[PawnOwnership] PotentialWorkThingsGlobal: {pawn.Name} 原始 {resultList.Count} 个物品，过滤后 {filtered.Count} 个");
+            
+            return filtered;
         }
         
         // ==========================================
