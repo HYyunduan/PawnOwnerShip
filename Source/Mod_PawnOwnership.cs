@@ -1,6 +1,7 @@
 using HarmonyLib;
 using Verse;
 using Multiplayer.API;
+using PawnOwnership.Patches;
 
 namespace PawnOwnership
 {
