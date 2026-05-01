@@ -7,6 +7,12 @@ using RimWorld;
 
 namespace PawnOwnership
 {
+    public static class OwnershipContext
+    {
+        [System.ThreadStatic]
+        public static Verse.Pawn CurrentWorker;
+    }
+
     public class MapComponent_PawnOwnership : MapComponent
     {
         // ==========================================
@@ -57,32 +63,42 @@ namespace PawnOwnership
         /// </summary>
         public static bool ShouldTrackOwnership(Thing thing)
         {
-            if (thing == null || thing.def == null) return false;
+            return true;
+            // if (thing == null || thing.def == null) return false;
             
-            // Item：物品、资源、装备等
-            if (thing.def.category == ThingCategory.Item) return true;
+            // // Item：物品、资源、装备等
+            // if (thing.def.category == ThingCategory.Item) return true;
             
-            // Building：建筑
-            if (thing is Building) return true;
+            // // Building：建筑
+            // if (thing is Building) return true;
             
-            // Blueprint：蓝图
-            if (thing is Blueprint) return true;
+            // // Blueprint：蓝图
+            // if (thing is Blueprint) return true;
             
-            // Frame：建造框架
-            if (thing is Frame) return true;
+            // // Frame：建造框架
+            // if (thing is Frame) return true;
             
-            // Corpse：尸体
-            if (thing is Corpse) return true;
+            // // Corpse：尸体
+            // if (thing is Corpse) return true;
+
+            // // Plant：植物
+            // if (thing is Plant) return true;
             
-            return false;
+            // return false;
         }
         
         public void SetOwner(Thing thing, string playerId)
         {
             if (thing == null) return;
-            if (!ShouldTrackOwnership(thing)) return;
+            if (!ShouldTrackOwnership(thing)){
+                // DebugLog($"[PawnOwnerShip] SetOwner filtered:{thing.ThingID} -> {playerId}");
+                Log.Message($"[PawnOwnerShip] SetOwner filtered:{thing.ThingID} -> {playerId}");
+
+                return;
+            }  
             thingOwnership[thing.ThingID] = playerId;
-            DebugLog($"[PawnOwnership] SetOwner: {thing.ThingID} -> {playerId}");
+            // DebugLog($"[PawnOwnership] SetOwner: {thing.ThingID} -> {playerId}");
+            Log.Message($"[PawnOwnerShip] SetOwner filtered:{thing.ThingID} -> {playerId}");
         }
         
         public void SetOwner(string thingID, string playerId)

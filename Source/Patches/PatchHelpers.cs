@@ -5,7 +5,7 @@ using Verse.AI;
 using RimWorld;
 using Multiplayer.API;
 
-namespace PawnOwnership
+namespace PawnOwnership.Patches
 {
     /// <summary>
     /// 统一的工作归属检查方法

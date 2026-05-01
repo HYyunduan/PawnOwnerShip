@@ -33,7 +33,7 @@ namespace PawnOwnership.Patches
                     foreach (var type in assembly.GetTypes())
                     {
                         // 只处理具体的子类（非抽象类）
-                        if (!type.IsSubclassOf(scannerType) || type.IsAbstract)
+                        if (!type.IsSubclassOf(scannerType))
                             continue;
                         
                         patchCount += PatchMethodIfExists(type, "JobOnThing", 
