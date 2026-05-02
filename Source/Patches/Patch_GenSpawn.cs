@@ -22,8 +22,6 @@ namespace PawnOwnership.Patches
             // 已有归属？跳过
             if (!string.IsNullOrEmpty(comp.GetOwner(newThing)))
             {
-                MapComponent_PawnOwnership.DebugLog(
-                    $"[PawnOwnership-GenSpawn] {newThing.ThingID} 已有归属，跳过");
                 return;
             }
 
@@ -39,8 +37,6 @@ namespace PawnOwnership.Patches
             Pawn worker = OwnershipContext.CurrentWorker;
             if (worker == null)
             {
-                MapComponent_PawnOwnership.DebugLog(
-                    $"[PawnOwnership-GenSpawn] {newThing.ThingID} 无 worker 上下文，跳过");
                 return;
             }
 
@@ -48,13 +44,8 @@ namespace PawnOwnership.Patches
             if (!string.IsNullOrEmpty(owner))
             {
                 comp.SetOwner(newThing, owner);
-                Log.Message(
-                    $"[PawnOwnership-GenSpawn] {newThing.ThingID} 归属 -> {owner} (worker={worker.Name}, job={worker.CurJob?.def.defName ?? "null"})");
-            }
-            else
-            {
                 MapComponent_PawnOwnership.DebugLog(
-                    $"[PawnOwnership-GenSpawn] {newThing.ThingID} worker {worker.Name} 无归属，跳过");
+                    $"[PawnOwnership-GenSpawn] {newThing.ThingID} 归属 -> {owner} (worker={worker.Name}, job={worker.CurJob?.def.defName ?? "null"})");
             }
         }
     }

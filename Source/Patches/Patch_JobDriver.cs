@@ -14,14 +14,10 @@ namespace PawnOwnership.Patches
         static void Prefix(JobDriver __instance)
         {
             OwnershipContext.CurrentWorker = __instance.pawn;
-            MapComponent_PawnOwnership.DebugLog(
-                $"[PawnOwnership-DriverTick] Set worker: {__instance.pawn.Name} ({__instance.pawn.GetOwner() ?? "no owner"})");
         }
 
         static void Postfix(JobDriver __instance)
         {
-            MapComponent_PawnOwnership.DebugLog(
-                $"[PawnOwnership-DriverTick] Clear worker: {__instance.pawn.Name}");
             OwnershipContext.CurrentWorker = null;
         }
     }
