@@ -8,15 +8,15 @@ namespace PawnOwnership
 {
     public class Dialog_SetOwner : Window
     {
-        private Pawn pawn;
+        private Thing thing;
         private List<IPlayerInfo> players;
         private Vector2 scrollPosition;
         private float scrollViewHeight;
 
-        public Dialog_SetOwner(Pawn pawn)
+        public Dialog_SetOwner(Thing thing)
         {
-            this.pawn = pawn;
-            
+            this.thing = thing;
+
             // 获取在线玩家列表
             if (MP.enabled && MP.IsInMultiplayer)
             {
@@ -24,7 +24,6 @@ namespace PawnOwnership
             }
             else
             {
-                // 单人模式，显示默认玩家
                 this.players = new List<IPlayerInfo>();
             }
 
@@ -37,15 +36,22 @@ namespace PawnOwnership
 
         public override Vector2 InitialSize => new Vector2(400f, 450f);
 
+        private string GetCurrentOwner()
+        {
+            if (thing is Pawn pawn)
+                return pawn.GetOwner() ?? "无";
+            return thing.Map?.GetComponent<MapComponent_PawnOwnership>()?.GetOwner(thing) ?? "无";
+        }
+
         public override void DoWindowContents(Rect inRect)
         {
             Listing_Standard listing = new Listing_Standard();
             listing.Begin(inRect);
 
-            listing.Label($"设置角色 <b>{pawn.LabelShortCap}</b> 的归属玩家：");
+            listing.Label($"设置 <b>{thing.LabelShortCap}</b> 的归属玩家：");
             listing.Gap(12f);
 
-            string currentOwner = pawn.GetOwner() ?? "无";
+            string currentOwner = GetCurrentOwner();
             listing.Label($"当前归属: {currentOwner}");
             listing.Gap(12f);
 
@@ -55,7 +61,6 @@ namespace PawnOwnership
                 listing.Label("选择玩家:");
                 listing.Gap(6f);
 
-                // 计算滚动区域
                 Rect scrollRect = listing.GetRect(inRect.height - listing.CurHeight - 80f);
                 Rect viewRect = new Rect(0f, 0f, scrollRect.width - 16f, scrollViewHeight);
 
@@ -66,18 +71,17 @@ namespace PawnOwnership
                     {
                         string playerName = player.Username;
                         Rect rowRect = new Rect(0f, curY, viewRect.width, 30f);
-                        
-                        // 高亮当前归属玩家
+
                         if (playerName == currentOwner)
                         {
                             Widgets.DrawHighlight(rowRect);
                         }
-                        
+
                         if (Widgets.ButtonText(rowRect, playerName))
                         {
                             SetOwner(playerName);
                         }
-                        
+
                         curY += 32f;
                     }
                     scrollViewHeight = curY;
@@ -86,12 +90,11 @@ namespace PawnOwnership
             }
             else
             {
-                // 单人模式或无玩家
                 if (!MP.enabled || !MP.IsInMultiplayer)
                 {
                     listing.Label("单人模式");
                     listing.Gap(6f);
-                    
+
                     if (listing.ButtonText("设置为 Player1"))
                     {
                         SetOwner("Player1");
@@ -110,20 +113,21 @@ namespace PawnOwnership
                 SetOwner(null);
             }
 
-            listing.Gap(12f);
-
-            // 测试按钮：验证 Multiplayer 广播
-            if (listing.ButtonText("[测试] 广播 SyncSetMineOwner"))
-            {
-                TestSyncUI.Open();
-            }
-
             listing.End();
         }
 
         private void SetOwner(string ownerName)
         {
-            MapComponent_PawnOwnership.SyncSetPawnOwner(Find.CurrentMap.uniqueID, pawn.ThingID, ownerName);
+            if (thing is Pawn)
+            {
+                MapComponent_PawnOwnership.SyncSetPawnOwner(
+                    Find.CurrentMap.uniqueID, thing.ThingID, ownerName);
+            }
+            else
+            {
+                MapComponent_PawnOwnership.SyncSetThingOwner(
+                    Find.CurrentMap.uniqueID, thing.ThingID, ownerName);
+            }
             this.Close();
         }
     }

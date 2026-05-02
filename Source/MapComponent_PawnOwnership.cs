@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using Verse;
 using Multiplayer.API;
 using UnityEngine;
@@ -325,6 +326,16 @@ namespace PawnOwnership
         // Pawn 归属同步（用于 UI 设置）
         // ==========================================
         
+        public static void SyncSetThingOwner(int mapId, string thingID, string ownerName)
+        {
+            Map targetMap = Find.Maps.FirstOrDefault(m => m.uniqueID == mapId);
+            if (targetMap == null) return;
+            var comp = targetMap.GetComponent<MapComponent_PawnOwnership>();
+            if (comp == null) return;
+            comp.SyncSetOwner(thingID, ownerName);
+            DebugLog($"[PawnOwnership] SyncSetThingOwner: {thingID} -> {ownerName}");
+        }
+
         [SyncMethod]
         public static void SyncSetPawnOwner(int mapId, string pawnThingID, string ownerName)
         {
@@ -343,8 +354,21 @@ namespace PawnOwnership
         // 统一绘制归属标志
         // ==========================================
         
+        private static int lastColorRefreshFrame = -1;
+
+        public override void MapComponentDraw()
+        {
+            DrawOwnershipMarkers();
+        }
+
         public void DrawOwnershipMarkers()
         {
+            // 每 60 帧刷新一次玩家颜色缓存
+            if (Time.frameCount - lastColorRefreshFrame >= 60)
+            {
+                lastColorRefreshFrame = Time.frameCount;
+                RefreshPlayerColors();
+            }
             // 绘制 Blueprint 归属
             foreach (var blueprint in map.listerThings.ThingsInGroup(ThingRequestGroup.Blueprint))
             {
@@ -442,15 +466,79 @@ namespace PawnOwnership
             );
         }
         
+        // ==========================================
+        // 玩家颜色缓存（同步 Multiplayer 颜色）
+        // ==========================================
+        private static Dictionary<string, Color> playerColorCache = new Dictionary<string, Color>();
+        private static bool colorCacheInitialized = false;
+
+        /// <summary>
+        /// 从 Multiplayer 的 PlayerInfo 实例读取颜色，刷新缓存
+        /// </summary>
+        public static void RefreshPlayerColors()
+        {
+            playerColorCache.Clear();
+
+            if (!MP.enabled || !MP.IsInMultiplayer)
+            {
+                colorCacheInitialized = true;
+                return;
+            }
+
+            try
+            {
+                var players = MP.GetPlayers();
+                if (players == null) return;
+
+                // 反射获取 PlayerInfo 类的 color 字段
+                FieldInfo colorField = null;
+
+                foreach (var player in players)
+                {
+                    if (player == null) continue;
+
+                    string name = player.Username;
+                    if (string.IsNullOrEmpty(name)) continue;
+
+                    // 延迟获取 colorField（只做一次）
+                    if (colorField == null)
+                    {
+                        colorField = player.GetType().GetField("color",
+                            BindingFlags.Public | BindingFlags.Instance);
+                        if (colorField == null)
+                        {
+                            DebugLog("[PawnOwnership] PlayerInfo.color 字段不存在，使用 fallback 颜色");
+                            break;
+                        }
+                    }
+
+                    object value = colorField.GetValue(player);
+                    if (value is Color c)
+                    {
+                        playerColorCache[name] = c;
+                        DebugLog($"[PawnOwnership] 玩家颜色: {name} -> R:{c.r:F2} G:{c.g:F2} B:{c.b:F2}");
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Log.Warning($"[PawnOwnership] RefreshPlayerColors 失败: {ex.Message}");
+            }
+
+            colorCacheInitialized = true;
+        }
+
         private Color GetPlayerColor(string playerName)
         {
+            // 多人模式：从缓存取 Multiplayer 颜色
+            if (colorCacheInitialized && playerColorCache.TryGetValue(playerName, out Color mpColor))
+                return mpColor;
+
+            // fallback：hash 生成（单人模式 / 缓存未初始化 / 玩家不在缓存中）
             int hash = playerName.GetHashCode();
-            float r = ((hash & 0xFF) / 255f);
-            float g = ((hash >> 8 & 0xFF) / 255f);
-            float b = ((hash >> 16 & 0xFF) / 255f);
-            r = 0.3f + r * 0.7f;
-            g = 0.3f + g * 0.7f;
-            b = 0.3f + b * 0.7f;
+            float r = 0.3f + (hash & 0xFF) / 255f * 0.7f;
+            float g = 0.3f + ((hash >> 8) & 0xFF) / 255f * 0.7f;
+            float b = 0.3f + ((hash >> 16) & 0xFF) / 255f * 0.7f;
             return new Color(r, g, b, 1f);
         }
 
