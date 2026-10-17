@@ -175,6 +175,24 @@ namespace PatchAudit
                 return 0;
             }
 
+            if (args.Length >= 3 && args[0] == "--types")
+            {
+                var d = AssemblyDump.Load(args[1]);
+                string pattern = args[2];
+                int n = 0;
+                foreach (var ti in d.ByFull.Values)
+                {
+                    if (ti.FullName == null) continue;
+                    if (ti.FullName.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                    n++;
+                    Console.WriteLine("type " + ti.FullName);
+                    foreach (var kv in ti.Methods)
+                        foreach (var m in kv.Value) Console.WriteLine("   method    : " + m);
+                }
+                Console.WriteLine("== 匹配类型数: " + n + " ==");
+                return 0;
+            }
+
             if (args.Length >= 3 && args[0] == "--dump")
             {
                 var d = AssemblyDump.Load(args[1]);
