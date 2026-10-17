@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
@@ -85,6 +86,20 @@ namespace PawnOwnership.Testing
         {
             return string.Equals(scenario, OwnershipScenario, StringComparison.OrdinalIgnoreCase);
         }
+
+        /// <summary>标记可见性探针场景名：用游戏内抓帧做 A/B 数值判定，不依赖人眼看图。</summary>
+        private const string MarkerProbeScenario = "markerprobe";
+
+        private bool IsMarkerProbeScenario()
+        {
+            return string.Equals(scenario, MarkerProbeScenario, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>探针用的锚点：已设归属物品的格子坐标（用于投影到屏幕坐标）。</summary>
+        private readonly List<IntVec3> probeAnchors = new List<IntVec3>();
+
+        /// <summary>探针协程只允许启动一次。</summary>
+        private bool probeStarted;
 
         private static TestDriver instance;
         private static string pendingScenario;
@@ -217,6 +232,19 @@ namespace PawnOwnership.Testing
                         RunOwnershipCases();
                         return;
                     }
+                    if (IsMarkerProbeScenario())
+                    {
+                        // 标记可见性探针：造归属 → 游戏内抓帧 A/B/C → 数值判定。
+                        // 必须只启动一次：Prepare 阶段每帧都会进来，重复启动会让多个协程
+                        // 互相穿插地开关标记/抓帧，比较结果变成垃圾。
+                        if (!probeStarted)
+                        {
+                            probeStarted = true;
+                            PrepareScene();
+                            StartCoroutine(RunMarkerProbe());
+                        }
+                        return;
+                    }
                     PrepareScene();
                     Enter(Phase.CaptureOn);
                     break;
@@ -276,7 +304,7 @@ namespace PawnOwnership.Testing
 
             // ownership 场景必须在真实地图上跑用例，因此和 loadsave 一样需要存档。
             // 不能走 quickstart：QuickStarter.CheckQuickStart() 经实测无任何效果（见 docs/DECISIONS.md F3）。
-            if (scenario == "loadsave" || scenario == "ownership")
+            if (scenario == "loadsave" || scenario == "ownership" || IsMarkerProbeScenario())
             {
                 if (string.IsNullOrEmpty(saveName))
                 {
@@ -351,6 +379,7 @@ namespace PawnOwnership.Testing
                 if (t.def.category != ThingCategory.Item) continue;
 
                 comp.SetOwner(t, "SelfTest");
+                probeAnchors.Add(t.Position);
                 if (n == 0) focus = t.Position;
                 n++;
                 if (n >= 5) break;
@@ -531,6 +560,115 @@ namespace PawnOwnership.Testing
             Finish(false, reason);
         }
 
+        /// <summary>
+        /// 标记可见性探针：游戏内抓帧做 A/B 判定。
+        /// 逻辑：抓"开"两帧 → 噪声基线；关标记抓一帧 → 信号；
+        /// 对每个已知锚点（已设归属物品的行星坐标投影到屏幕）比较窗口内像素差，
+        /// 信号显著高于噪声才判定"标记可见"。
+        /// </summary>
+        private IEnumerator RunMarkerProbe()
+        {
+            notes.Add("markerprobe: 开始抓帧");
+
+            // 让摄像机/地图动画先稳定下来，否则两帧之间的"天然差异"会盖过信号。
+            for (int i = 0; i < 20; i++) yield return null;
+
+            SetMarkers(true);
+            yield return new WaitForEndOfFrame();
+            MarkerVisibilityProbe.Frame on1 = MarkerVisibilityProbe.Capture();
+            yield return new WaitForEndOfFrame();
+            MarkerVisibilityProbe.Frame on2 = MarkerVisibilityProbe.Capture();
+
+            if (!on1.Valid || !on2.Valid)
+            {
+                Finish(false, "抓帧失败（CaptureScreenshotAsTexture 不可用）");
+                yield break;
+            }
+
+            SetMarkers(false);
+            yield return null;
+            yield return new WaitForEndOfFrame();
+            MarkerVisibilityProbe.Frame off = MarkerVisibilityProbe.Capture();
+            SetMarkers(true);
+
+            notes.Add("抓帧时上一帧绘制标记数=" + MapComponent_PawnOwnership.MarkersDrawnLastFrame
+                      + "，DrawCalls=" + MapComponent_PawnOwnership.DrawCalls);
+
+            if (!off.Valid)
+            {
+                Finish(false, "关闭标记后抓帧失败");
+                yield break;
+            }
+
+            int noise = MarkerVisibilityProbe.FullFrameDiff(on1, on2);
+            int signal = MarkerVisibilityProbe.FullFrameDiff(on1, off);
+
+            Camera cam = Current.Camera;
+            int best = 0;
+            int bestIdx = -1;
+            bool bestFlipped = false;
+            int onScreen = 0;
+            var anchorDiffs = new List<int>();
+
+            for (int i = 0; i < probeAnchors.Count; i++)
+            {
+                IntVec3 cell = probeAnchors[i];
+                // 锚点必须投影到「标记实际被画出的世界坐标」：物品水平位置 + 标记所用的层高。
+                // 若投影到地面 (x,0,z)，透视相机下会与高空标记错开，窗口就量不到东西。
+                Vector3 world = new Vector3(
+                    cell.x + 0.5f,
+                    AltitudeLayer.MetaOverlays.AltitudeFor() + 0.1f,
+                    cell.z + 0.5f);
+                Vector3 sp = cam.WorldToScreenPoint(world);
+                bool visible = sp.z > 0f && sp.x >= 0f && sp.x < on1.Width && sp.y >= 0f && sp.y < on1.Height;
+                if (!visible)
+                {
+                    notes.Add("锚点 " + i + " " + cell + " 不在屏幕内");
+                    continue;
+                }
+
+                onScreen++;
+                bool flipped;
+                int d = MarkerVisibilityProbe.AnchorDiff(on1, off, (int)sp.x, (int)sp.y, out flipped);
+                anchorDiffs.Add(d);
+                notes.Add("锚点 " + i + " " + cell + " 屏幕=(" + (int)sp.x + "," + (int)sp.y
+                          + ") 窗口差异=" + d + (flipped ? " (y 翻转后更优)" : string.Empty));
+                if (d > best)
+                {
+                    best = d;
+                    bestIdx = i;
+                    bestFlipped = flipped;
+                }
+            }
+
+            int windowPixels = (MarkerVisibilityProbe.WindowRadius * 2 + 1) * (MarkerVisibilityProbe.WindowRadius * 2 + 1);
+            int totalPixels = on1.Width * on1.Height;
+            double noisePerWindow = totalPixels > 0 ? (double)noise * windowPixels / totalPixels : 0.0;
+            double threshold = Math.Max(10.0, noisePerWindow * 2.0);
+
+            // 判定改为「有多少个锚点真的测到了标记」，而不是只看单个最大值：
+            // 单个 17 像素的差异可能是巧合，多个锚点同时成立才算可靠。
+            int detectedAnchors = 0;
+            foreach (int d in anchorDiffs)
+            {
+                if (d > threshold) detectedAnchors++;
+            }
+
+            bool detected = detectedAnchors >= Math.Max(1, Math.Min(3, onScreen)) && signal > noise * 3;
+
+            notes.Add("噪声基线整帧差异=" + noise + "（折合每窗口约 " + noisePerWindow.ToString("F1") + " 像素）");
+            notes.Add("信号整帧差异=" + signal);
+            notes.Add("屏幕内锚点=" + onScreen + "/" + probeAnchors.Count);
+            notes.Add("达到阈值的锚点=" + detectedAnchors + "（阈值 " + threshold.ToString("F1") + "）");
+            notes.Add("最佳锚点=" + bestIdx + " 窗口差异=" + best + (bestFlipped ? " (y 翻转)" : string.Empty));
+            notes.Add("判定 detected=" + detected);
+
+            Finish(detected, detected
+                ? null
+                : "未检测到标记像素（达到阈值的锚点 " + detectedAnchors + "，最佳窗口差异 "
+                  + best + "，阈值 " + threshold.ToString("F1") + "）");
+        }
+
         private void Finish(bool ok, string error)
         {
             if (finished) return;
@@ -546,7 +684,7 @@ namespace PawnOwnership.Testing
 
             // 标记场景专用断言：绘制数 + 三张截图。ownership 场景不出图，绝不套用这些判定，
             // 否则永远不会通过（ownedCount/markersOnDrawn 均为 0、png 不存在）。
-            if (ok && !IsOwnershipScenario())
+            if (ok && !IsOwnershipScenario() && !IsMarkerProbeScenario())
             {
                 var failures = new List<string>();
                 if (ownedCount <= 0) failures.Add("ownedCount=" + ownedCount + " (预期>0)");
