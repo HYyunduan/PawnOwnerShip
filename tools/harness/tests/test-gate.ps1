@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Stop'
 $repo = Split-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) -Parent
 $root = Join-Path $repo ('artifacts/qa-gate-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $root | Out-Null
@@ -9,14 +9,15 @@ using System.IO;
 class ProtocolFixture {
  static int Main(string[] args) {
   string mode=Environment.GetEnvironmentVariable("POQA_CASE");
-  if(args.Length==2) {
+  string reportArg=null;
+  foreach(string arg in args) if(arg.StartsWith("-po.selftest-report=")) reportArg=arg.Substring(20).Trim('\u0022');
+  if(reportArg==null) {
    if(mode=="audit-fail") { Console.WriteLine("=== RESULT ok=30 fail=1 ==="); return 1; }
    if(mode=="audit-short") { Console.WriteLine("=== RESULT ok=0 fail=0 ==="); return 0; }
    Console.WriteLine("=== RESULT ok=31 fail=0 ==="); return 0;
   }
   File.WriteAllText(Environment.GetEnvironmentVariable("POQA_MARKER"),"launched");
-  foreach(string arg in args) if(arg.StartsWith("-po.selftest-report="))
-   File.WriteAllText(arg.Substring(20),"{\"healthy\":true,\"patchedMethods\":31,\"prefixes\":20,\"postfixes\":11,\"transpilers\":0}");
+  File.WriteAllText(reportArg,"{\"healthy\":true,\"patchedMethods\":31,\"prefixes\":20,\"postfixes\":11,\"transpilers\":0}");
   return 0;
  }
 }

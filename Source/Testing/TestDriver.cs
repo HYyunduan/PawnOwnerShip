@@ -10,16 +10,19 @@ using RimWorld;
 namespace PawnOwnership.Testing
 {
     /// <summary>
-    /// L2 场景驱动：进游戏 → 造归属 → 截图（开 / 关 / 恢复）→ 写报告。
+    /// L2 场景驱动：
+    ///   - 标记场景（quickstart / quicktest / loadsave）：进游戏 → 造归属 → 截图（开 / 关 / 恢复）→ 写报告；
+    ///   - 归属场景（scenario=ownership）：进游戏 → 跑 <see cref="RunOwnershipCases"/> → 写报告，不截图。
     ///
     /// 设计约束（见 docs/DECISIONS.md 与已确认的 S3b 设计）：
     ///   - 不新增 Harmony patch：用隐藏 GameObject 的 Update() 拿每帧回调；
     ///   - 不新增程序集引用：截图走反射调用 UnityEngine.ScreenCapture；
     ///   - 不写存档、不调 ModSettings.WriteSettings：开关只在内存里改，结束时恢复。
     ///
-    /// 两条开局路径：
-    ///   scenario=quickstart → Verse.QuickStarter.CheckQuickStart()（进程内临时开开发者模式）
-    ///   scenario=loadsave   → GameDataSaveLoader.LoadGame(saveName)
+    /// 开局路径：
+    ///   scenario=quickstart / quicktest / ownership → Verse.QuickStarter.CheckQuickStart()
+    ///                                                 （quicktest 走 Root_Play.SetupForQuickTestPlay()）
+    ///   scenario=loadsave                           → GameDataSaveLoader.LoadGame(saveName)
     /// </summary>
     public class TestDriver : MonoBehaviour
     {
@@ -60,12 +63,34 @@ namespace PawnOwnership.Testing
         private readonly List<string> notes = new List<string>();
 
         private int idleFrames;
+        private float beginGameAt;
 
         private const int EntrySettleFrames = 180;
-        private const int MapTimeoutFrames = 3600; // 约 60 秒
+        // 存档加载期间帧率极低，按帧数计时会严重低估真实耗时（曾因此在 3600 帧时误判超时）。
+        private const float MapTimeoutSeconds = 300f;
         private const int ShotSettleFrames = 40;   // 截图为异步落盘，间隔要给足
         private const int FinishSettleFrames = 150; // 最后一张截图后等落盘再写报告
         private const int ToggleSettleFrames = 3;
+
+        /// <summary>归属用例场景名。该场景只跑用例，不截图、不校验标记绘制。</summary>
+        private const string OwnershipScenario = "ownership";
+
+        /// <summary>归属用例报告文件名（由 OwnershipCases.RunAll 写入 outDir）。</summary>
+        private const string OwnershipReportFile = "ownership-report.json";
+
+        /// <summary>
+        /// 是否为 ownership 场景。标记专用断言（绘制数 / 截图）只对非 ownership 场景成立。
+        /// </summary>
+        private bool IsOwnershipScenario()
+        {
+            return string.Equals(scenario, OwnershipScenario, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static TestDriver instance;
+        private static string pendingScenario;
+        private static string pendingSave;
+        private static string pendingOutDir;
+        private static bool sceneHookInstalled;
 
         public static void Start(string scenario, string saveName, string outDir)
         {
@@ -74,17 +99,17 @@ namespace PawnOwnership.Testing
                 if (string.IsNullOrEmpty(outDir)) outDir = Path.Combine(Path.GetTempPath(), "po-scenario");
                 Directory.CreateDirectory(outDir);
 
-                var go = new GameObject("PawnOwnershipTestDriver");
-                UnityEngine.Object.DontDestroyOnLoad(go);
-                var driver = go.AddComponent<TestDriver>();
-                driver.scenario = scenario;
-                driver.saveName = saveName;
-                driver.outDir = outDir;
-                driver.originalShowMarkers = Mod_PawnOwnership.ShowMarkers;
-                driver.originalDevMode = Prefs.DevMode;
+                pendingScenario = scenario;
+                pendingSave = saveName;
+                pendingOutDir = outDir;
 
-                Log.Message("[PawnOwnership][TestDriver] 已启动：scenario=" + scenario
-                            + ", save=" + (saveName ?? "(none)") + ", out=" + outDir);
+                // 启动阶段创建的对象可能与场景加载竞争而丢失（实测表现为 Update 从不被调用）。
+                // 因此除了立即创建，还在每次场景加载后检查实例是否还在，丢了就重建。
+                UnityEngine.SceneManagement.SceneManager.sceneLoaded -= OnSceneLoaded;
+                UnityEngine.SceneManagement.SceneManager.sceneLoaded += OnSceneLoaded;
+                sceneHookInstalled = true;
+
+                SpawnInstance();
             }
             catch (Exception ex)
             {
@@ -92,10 +117,44 @@ namespace PawnOwnership.Testing
             }
         }
 
+        private static void OnSceneLoaded(UnityEngine.SceneManagement.Scene scene, UnityEngine.SceneManagement.LoadSceneMode mode)
+        {
+            if (instance != null) return;
+            if (string.IsNullOrEmpty(pendingScenario)) return;
+            Log.Warning("[PawnOwnership][TestDriver] 场景加载后实例丢失，重建驱动（场景=" + scene.name + "）");
+            SpawnInstance();
+        }
+
+        private static void SpawnInstance()
+        {
+            var go = new GameObject("PawnOwnershipTestDriver");
+            UnityEngine.Object.DontDestroyOnLoad(go);
+            var driver = go.AddComponent<TestDriver>();
+            driver.scenario = pendingScenario;
+            driver.saveName = pendingSave;
+            driver.outDir = pendingOutDir;
+            driver.originalShowMarkers = Mod_PawnOwnership.ShowMarkers;
+            driver.originalDevMode = Prefs.DevMode;
+            instance = driver;
+
+            Log.Message("[PawnOwnership][TestDriver] 已启动：scenario=" + pendingScenario
+                        + ", save=" + (pendingSave ?? "(none)") + ", out=" + pendingOutDir);
+        }
+
         private void Update()
         {
             if (finished) return;
             frame++;
+
+            // 心跳：用于区分「Update 没被调用」与「状态机在等条件」。
+            if (frame % 120 == 0)
+            {
+                Log.Message("[PawnOwnership][TestDriver] heartbeat phase=" + phase
+                            + " state=" + Current.ProgramState
+                            + " inEntry=" + GenScene.InEntryScene
+                            + " map=" + (Find.CurrentMap != null)
+                            + " frames=" + frame);
+            }
 
             try
             {
@@ -143,15 +202,21 @@ namespace PawnOwnership.Testing
                     {
                         Enter(Phase.Prepare);
                     }
-                    else if (frame - phaseFrame > MapTimeoutFrames)
+                    else if (Time.realtimeSinceStartup - beginGameAt > MapTimeoutSeconds)
                     {
-                        Fail("等待地图超时（" + MapTimeoutFrames + " 帧），scenario=" + scenario
+                        Fail("等待地图超时（" + MapTimeoutSeconds + " 秒），scenario=" + scenario
                              + "。可能卡在对话框或被 mod 不匹配阻断。");
                     }
                     break;
 
                 case Phase.Prepare:
                     if (frame - phaseFrame < 30) return;
+                    if (IsOwnershipScenario())
+                    {
+                        // 归属用例自己建实体、自己清理，不共用标记场景的 PrepareScene / 截图流程。
+                        RunOwnershipCases();
+                        return;
+                    }
                     PrepareScene();
                     Enter(Phase.CaptureOn);
                     break;
@@ -207,8 +272,18 @@ namespace PawnOwnership.Testing
 
         private void BeginGame()
         {
-            if (scenario == "loadsave")
+            beginGameAt = Time.realtimeSinceStartup;
+
+            // ownership 场景必须在真实地图上跑用例，因此和 loadsave 一样需要存档。
+            // 不能走 quickstart：QuickStarter.CheckQuickStart() 经实测无任何效果（见 docs/DECISIONS.md F3）。
+            if (scenario == "loadsave" || scenario == "ownership")
             {
+                if (string.IsNullOrEmpty(saveName))
+                {
+                    Fail("scenario=" + scenario + " 需要通过 -SaveName 指定一个存档");
+                    return;
+                }
+
                 notes.Add("加载存档: " + saveName);
                 Log.Message("[PawnOwnership][TestDriver] 加载存档: " + saveName);
                 GameDataSaveLoader.LoadGame(saveName);
@@ -259,9 +334,7 @@ namespace PawnOwnership.Testing
         private void PrepareScene()
         {
             Map map = Find.CurrentMap;
-            currentMapInfo = map != null
-                ? (map.info != null ? map.info.parent?.LabelCap.ToString() : "map " + map.uniqueID)
-                : "(null)";
+            currentMapInfo = DescribeCurrentMap();
 
             var comp = map.GetComponent<MapComponent_PawnOwnership>();
             if (comp == null)
@@ -302,6 +375,114 @@ namespace PawnOwnership.Testing
             }
 
             SetMarkers(true);
+        }
+
+        private string DescribeCurrentMap()
+        {
+            Map map = Find.CurrentMap;
+            return map != null
+                ? (map.info != null ? map.info.parent?.LabelCap.ToString() : "map " + map.uniqueID)
+                : "(null)";
+        }
+
+        /// <summary>
+        /// ownership 场景入口：调用 <c>OwnershipCases.RunAll(outDir)</c>，然后把结果落进
+        /// scenario-report.json（Finish 负责）。三条要求：
+        ///   1. 用例抛异常必须在这里收口并走 Fail → Finish，否则驱动会卡在 Prepare 相位；
+        ///   2. RunAll 返回 true 但报告缺失时判失败，避免"报告写不出来却门禁全绿"的假通过；
+        ///   3. 生产构建（net472）走直接调用，契约在编译期受检查；stub 夹具
+        ///      （tools/harness/tests/driver/DriverRegression.csproj，只链接 TestDriver.cs
+        ///      并 stub 引擎 API）没有 OwnershipCases 类型，那里退回反射调用，
+        ///      两条路径调用的是同一个 RunAll(string)。
+        /// </summary>
+        private void RunOwnershipCases()
+        {
+            currentMapInfo = DescribeCurrentMap();
+            notes.Add("ownership 场景：调用 OwnershipCases.RunAll");
+            Log.Message("[PawnOwnership][TestDriver] ownership 场景开始，outDir=" + outDir);
+
+            try
+            {
+                bool ok;
+#if NETFRAMEWORK
+                // 生产路径：直接调用。规格要求；同时让类型/方法签名在编译期即受检查。
+                ok = OwnershipCases.RunAll(outDir);
+#else
+                // 仅 stub 夹具（net8.0 等无游戏类型的目标）走这里，见上方第 3 条。
+                MethodInfo runAll = FindOwnershipCasesRunAll();
+                if (runAll == null)
+                {
+                    Fail("找不到 PawnOwnership.Testing.OwnershipCases.RunAll(string)");
+                    return;
+                }
+
+                object result = runAll.Invoke(null, new object[] { outDir });
+                ok = result is bool && (bool)result;
+#endif
+                notes.Add("OwnershipCases.RunAll 返回 " + ok);
+
+                if (ok)
+                {
+                    string reportPath = Path.Combine(outDir, OwnershipReportFile);
+                    if (!File.Exists(reportPath))
+                    {
+                        Fail("ownership 用例返回通过，但未生成 " + OwnershipReportFile);
+                        return;
+                    }
+                    notes.Add("已生成 " + OwnershipReportFile);
+                }
+
+                Finish(ok, ok ? null : "详见 " + OwnershipReportFile);
+            }
+            catch (Exception ex)
+            {
+                Fail("ownership 用例执行异常: " + DescribeException(ex));
+            }
+        }
+
+#if !NETFRAMEWORK
+        /// <summary>
+        /// stub 夹具用的反射解析：返回 null 表示契约缺失。见 RunOwnershipCases 的说明。
+        /// </summary>
+        private static MethodInfo FindOwnershipCasesRunAll()
+        {
+            const string typeName = "PawnOwnership.Testing.OwnershipCases";
+
+            Type type = Type.GetType(typeName, false);
+            if (type == null)
+            {
+                foreach (Assembly asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    try
+                    {
+                        type = asm.GetType(typeName, false);
+                    }
+                    catch
+                    {
+                        type = null;
+                    }
+                    if (type != null) break;
+                }
+            }
+            if (type == null) return null;
+
+            return type.GetMethod(
+                "RunAll",
+                BindingFlags.Public | BindingFlags.Static,
+                null,
+                new[] { typeof(string) },
+                null);
+        }
+#endif
+
+        /// <summary>
+        /// 异常信息尽量带内层异常：反射调用的异常会被包成 TargetInvocationException。
+        /// </summary>
+        private static string DescribeException(Exception ex)
+        {
+            var tie = ex as TargetInvocationException;
+            if (tie != null && tie.InnerException != null) ex = tie.InnerException;
+            return ex.GetType().Name + ": " + ex.Message;
         }
 
         private void SetMarkers(bool on)
@@ -353,7 +534,19 @@ namespace PawnOwnership.Testing
         private void Finish(bool ok, string error)
         {
             if (finished) return;
-            if (ok)
+
+            // 收尾时解除场景钩子并清空待启动参数，避免 sceneLoaded 把驱动又重建一遍。
+            instance = null;
+            pendingScenario = null;
+            if (sceneHookInstalled)
+            {
+                UnityEngine.SceneManagement.SceneManager.sceneLoaded -= OnSceneLoaded;
+                sceneHookInstalled = false;
+            }
+
+            // 标记场景专用断言：绘制数 + 三张截图。ownership 场景不出图，绝不套用这些判定，
+            // 否则永远不会通过（ownedCount/markersOnDrawn 均为 0、png 不存在）。
+            if (ok && !IsOwnershipScenario())
             {
                 var failures = new List<string>();
                 if (ownedCount <= 0) failures.Add("ownedCount=" + ownedCount + " (预期>0)");
@@ -380,11 +573,15 @@ namespace PawnOwnership.Testing
             try { Mod_PawnOwnership.ShowMarkers = originalShowMarkers; } catch { }
             try { Prefs.DevMode = originalDevMode; } catch { }
 
-            // 记录截图是否真的落盘（Unity 的截图是异步写文件，调用成功 ≠ 文件存在）
-            foreach (string f in new[] { "01-markers-on.png", "02-markers-off.png", "03-markers-back.png" })
+            // 记录截图是否真的落盘（Unity 的截图是异步写文件，调用成功 ≠ 文件存在）。
+            // ownership 场景不截图，这段只对标记场景有意义。
+            if (!IsOwnershipScenario())
             {
-                try { notes.Add("文件 " + f + " 存在=" + File.Exists(Path.Combine(outDir, f))); }
-                catch { }
+                foreach (string f in new[] { "01-markers-on.png", "02-markers-off.png", "03-markers-back.png" })
+                {
+                    try { notes.Add("文件 " + f + " 存在=" + File.Exists(Path.Combine(outDir, f))); }
+                    catch { }
+                }
             }
 
             try
@@ -405,6 +602,7 @@ namespace PawnOwnership.Testing
             var sb = new StringBuilder();
             sb.Append("{\n");
             sb.Append("  \"scenario\": ").Append(Q(scenario)).Append(",\n");
+            sb.Append("  \"markerScenario\": ").Append(IsOwnershipScenario() ? "false" : "true").Append(",\n");
             sb.Append("  \"save\": ").Append(Q(saveName)).Append(",\n");
             sb.Append("  \"ok\": ").Append(ok ? "true" : "false").Append(",\n");
             sb.Append("  \"error\": ").Append(Q(error)).Append(",\n");

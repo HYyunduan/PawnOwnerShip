@@ -34,7 +34,8 @@ param(
 
     [int]$LaunchTimeoutSec = 150,
 
-    # L2 场景驱动：quickstart（开发者模式快速开局）或 loadsave（加载指定存档）
+    # L2 场景驱动：quickstart（开发者模式快速开局）、quicktest（Root_Play 快速测试开局）、
+    # loadsave（加载指定存档）或 ownership（跑归属用例，不截图）
     [string]$Scenario = '',
 
     [string]$SaveName = ''
@@ -61,6 +62,22 @@ function Add-Step {
     [void]$steps.Add([ordered]@{ name = $Name; ok = $Ok; detail = $Detail })
     $mark = if ($Ok) { 'PASS' } else { 'FAIL' }
     Write-Host ("[{0}] {1}  {2}" -f $mark, $Name, $Detail)
+}
+
+# ownership 场景的逐用例结果在 <scenarioDir>/ownership-report.json（由 mod 侧 OwnershipCases 写出）。
+# 这里只负责把 total/passed/failed 汇总到 scenario 步骤的 detail；读不到就用说明文字兜底，
+# 不让展示逻辑抛异常（是否通过与 scenario-report.json 的 ok 字段收口）。
+function Get-OwnershipSummary {
+    param([string]$ScenarioDir)
+    $path = Join-Path $ScenarioDir 'ownership-report.json'
+    if (-not (Test-Path $path)) { return 'ownership: 缺少 ownership-report.json' }
+    try {
+        $r = Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json
+        return ("ownership: total=" + $r.total + " passed=" + $r.passed + " failed=" + $r.failed)
+    }
+    catch {
+        return ('ownership: ownership-report.json 解析失败 - ' + $_.Exception.Message)
+    }
 }
 
 function Write-GateReport {
@@ -102,8 +119,8 @@ if ($Scenario -and -not $Launch) {
 if ($Launch -and -not $Deploy) {
     $inputErrors += "指定 -Launch 时必须同时指定 -Deploy"
 }
-if ($Scenario -notin @('', 'quickstart', 'loadsave', 'quicktest')) {
-    $inputErrors += ("-Scenario 只允许 ''/quickstart/loadsave/quicktest（当前: " + $Scenario + "）")
+if ($Scenario -notin @('', 'quickstart', 'loadsave', 'quicktest', 'ownership')) {
+    $inputErrors += ("-Scenario 只允许 ''/quickstart/loadsave/quicktest/ownership（当前: " + $Scenario + "）")
 }
 if ($Scenario -eq 'loadsave' -and [string]::IsNullOrWhiteSpace($SaveName)) {
     $inputErrors += "Scenario=loadsave 时必须提供 -SaveName"
@@ -282,7 +299,13 @@ try {
                     try {
                         $scenarioReport = Get-Content $scenarioFile -Raw -Encoding UTF8 | ConvertFrom-Json
                         $sOk = [bool]$scenarioReport.ok
-                        $detail = "ownedThings=" + $scenarioReport.ownedThings + " png=" + $pngCount
+                        if ($Scenario -eq 'ownership') {
+                            $detail = Get-OwnershipSummary $scenarioDir
+                        }
+                        else {
+                            $detail = "ownedThings=" + $scenarioReport.ownedThings
+                        }
+                        $detail += " png=" + $pngCount
                         if (-not $sOk) { $detail += "; error=" + $scenarioReport.error }
                         Add-Step 'scenario' $sOk $detail
                     }
