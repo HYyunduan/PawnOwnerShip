@@ -337,6 +337,29 @@ namespace PawnOwnership.Testing
             }
         }
 
+        /// <summary>当前会话中的玩家数量；无会话返回 -1。</summary>
+        public static int PlayerCount()
+        {
+            try
+            {
+                Assembly asm = MpAssembly();
+                if (asm == null) return -1;
+
+                Type t = asm.GetType("Multiplayer.Client.Multiplayer");
+                object s = t?.GetField("session", AnyStatic)?.GetValue(null);
+                if (s == null) return -1;
+
+                FieldInfo players = s.GetType().GetField("players", AnyInstance);
+                object list = players?.GetValue(s);
+                if (list is System.Collections.ICollection col) return col.Count;
+                return -1;
+            }
+            catch
+            {
+                return -1;
+            }
+        }
+
         /// <summary>会话状态的可读描述，写进测试报告用。</summary>
         public static string DescribeSession()
         {

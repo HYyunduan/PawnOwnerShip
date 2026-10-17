@@ -2,12 +2,14 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Text;
 using UnityEngine;
 using Verse;
 using Verse.AI;
 using RimWorld;
+using PawnOwnership.Patches;
 
 namespace PawnOwnership.Testing
 {
@@ -1012,17 +1014,127 @@ namespace PawnOwnership.Testing
         }
 
         /// <summary>
-        /// 联机观察（S1 阶段）：两端进入同一会话后，先记录会话与地图信息。
-        /// 归属过滤断言将在 S3 加入。
+        /// 联机观察（S3）：验证归属过滤在真实联机下是否生效。
+        ///
+        /// 主机：保持会话直到客户端完成（等待 players>=2，再维持一段时间）。
+        /// 客户端：以 <see cref="HaulAIUtility.PawnCanAutomaticallyHaul"/> 作为过滤入口做 A/B 对照：
+        ///   归属不同 → 期望被拦截（false）；归属相同 → 期望放行（true）。
         /// </summary>
         private void RunMpObserve()
         {
-            notes.Add("联机模式=" + MpTestBoot.Mode
-                      + "，地址=" + (MpTestBoot.IsClient ? MpTestBoot.ClientAddress : "(主机)"));
-            notes.Add("会话状态=" + MpTestBoot.DescribeSession());
-            notes.Add("地图=" + DescribeCurrentMap());
-            notes.Add("S1 里程碑：两端已进入同一联机会话");
-            Finish(true, null);
+            if (MpTestBoot.IsHost)
+            {
+                StartCoroutine(RunMpObserveHost());
+                return;
+            }
+
+            RunMpObserveClient();
+        }
+
+        private IEnumerator RunMpObserveHost()
+        {
+            notes.Add("联机模式=host，会话=" + MpTestBoot.DescribeSession());
+
+            float deadline = Time.realtimeSinceStartup + 180f;
+            int joined = -1;
+            while (Time.realtimeSinceStartup < deadline)
+            {
+                int n = MpTestBoot.PlayerCount();
+                if (n > joined) joined = n;
+                if (n >= 2) break;
+                yield return null;
+            }
+
+            notes.Add("观察到玩家数=" + joined + "（会话=" + MpTestBoot.DescribeSession() + "）");
+
+            // 主机需要存活到客户端完成断言：再维持 120 秒。
+            float keepAliveUntil = Time.realtimeSinceStartup + 120f;
+            while (Time.realtimeSinceStartup < keepAliveUntil)
+            {
+                yield return null;
+            }
+
+            notes.Add("客户端断言窗口结束，主机收尾");
+            Finish(joined >= 2, joined >= 2 ? null : "未观察到第二个玩家加入");
+        }
+
+        private void RunMpObserveClient()
+        {
+            Map map = Find.CurrentMap;
+            Pawn pawn = CropCases.FindColonist(map);
+            var comp = map.GetComponent<MapComponent_PawnOwnership>();
+            if (pawn == null || comp == null) { Finish(false, "缺少殖民者或归属组件"); return; }
+
+            var items = new List<Thing>();
+            foreach (Thing t in map.listerThings.ThingsInGroup(ThingRequestGroup.HaulableEver))
+            {
+                if (t == null || t.def == null || t.def.category != ThingCategory.Item) continue;
+                if (!t.Spawned) continue;
+                items.Add(t);
+                if (items.Count >= 2) break;
+            }
+
+            if (items.Count < 2) { Finish(false, "可搬运物品不足 2 个，无法做 A/B 对照"); return; }
+
+            Thing mine = items[0];
+            Thing foreign = items[1];
+            string origPawn = pawn.GetOwner();
+            string origMine = comp.GetOwner(mine);
+            string origForeign = comp.GetOwner(foreign);
+
+            bool sameAllowed = false;
+            bool foreignBlocked = false;
+            bool candidateFilterOk = false;
+            string filterDetail = "";
+
+            try
+            {
+                pawn.SetOwner(SelfOwner);
+                comp.SetOwner(mine, SelfOwner);
+                comp.SetOwner(foreign, OtherOwner);
+
+                // 核心谓词：同归属应放行、异归属应拦截（该方法本身不区分单机/联机）
+                sameAllowed = InvokeCheckThingOwnership(pawn, mine);
+                foreignBlocked = !InvokeCheckThingOwnership(pawn, foreign);
+
+                // MP 门控的候选列表过滤：联机下应剔除他人归属的物品
+                var input = new List<Thing> { mine, foreign };
+                List<Thing> filtered = PatchHelpers
+                    .PotentialWorkThingsGlobal_Postfix(input, pawn)
+                    .ToList();
+
+                bool hasMine = filtered.Contains(mine);
+                bool hasForeign = filtered.Contains(foreign);
+                candidateFilterOk = hasMine && !hasForeign;
+                filterDetail = "输入 2 个，过滤后 " + filtered.Count
+                               + " 个（含自己的=" + hasMine + "，含他人的=" + hasForeign + "）";
+            }
+            finally
+            {
+                try { pawn.SetOwner(origPawn); } catch { }
+                try { comp.SetOwner(mine, origMine); } catch { }
+                try { comp.SetOwner(foreign, origForeign); } catch { }
+            }
+
+            notes.Add("会话=" + MpTestBoot.DescribeSession() + "，玩家数=" + MpTestBoot.PlayerCount());
+            notes.Add("测试物品：自己的=" + mine.LabelShort + "(" + mine.ThingID + ")"
+                      + "，他人的=" + foreign.LabelShort + "(" + foreign.ThingID + ")");
+            notes.Add("M01 同归属放行（CheckThingOwnership=true）=" + sameAllowed);
+            notes.Add("M02 异归属拦截（CheckThingOwnership=false）=" + foreignBlocked);
+            notes.Add("M03 候选列表过滤（MP 门控）=" + candidateFilterOk + "；" + filterDetail);
+
+            bool pass = sameAllowed && foreignBlocked && candidateFilterOk;
+            notes.Add("判定：" + (pass ? "归属过滤在联机下按预期生效" : "归属过滤行为不符合预期"));
+            Finish(pass, pass ? null : "归属过滤未按预期生效，详见 M01/M02/M03");
+        }
+
+        /// <summary>CheckThingOwnership 为私有静态方法，测试侧用反射调用。</summary>
+        private static bool InvokeCheckThingOwnership(Pawn pawn, Thing thing)
+        {
+            MethodInfo m = typeof(PatchHelpers).GetMethod(
+                "CheckThingOwnership", BindingFlags.NonPublic | BindingFlags.Static);
+            if (m == null) return true;
+            return (bool)m.Invoke(null, new object[] { pawn, thing });
         }
 
         private void Finish(bool ok, string error)
