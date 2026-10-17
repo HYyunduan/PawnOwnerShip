@@ -353,13 +353,44 @@ namespace PawnOwnership
         
         private static int lastColorRefreshFrame = -1;
 
+        /// <summary>MapComponentDraw 被调用的累计次数。仅用于自验证，不影响行为。</summary>
+        public static int DrawCalls;
+
+        /// <summary>最近一帧实际绘制的归属标记数量。仅用于自验证，不影响行为。</summary>
+        public static int MarkersDrawnLastFrame;
+
         public override void MapComponentDraw()
         {
+            DrawCalls++;
+            MarkersDrawnLastFrame = 0;
             DrawOwnershipMarkers();
+        }
+
+        /// <summary>
+        /// 屏幕角落的快捷开关。正式入口在 Mod 设置页，两者共享同一状态（D-001）。
+        /// </summary>
+        public override void MapComponentOnGUI()
+        {
+            if (Find.CurrentMap != map) return;
+
+            Rect rect = new Rect(8f, 40f, 150f, 26f);
+            bool show = Mod_PawnOwnership.ShowMarkers;
+
+            if (Widgets.ButtonText(rect, show ? "归属标记: 开" : "归属标记: 关"))
+            {
+                Mod_PawnOwnership.ShowMarkers = !show;
+                Mod_PawnOwnership.PersistSettings();
+            }
+
+            TooltipHandler.TipRegion(rect, "切换归属颜色块的显示。也可在「选项 - 模组设置」中调整。");
         }
 
         public void DrawOwnershipMarkers()
         {
+            // 开关关闭时整段跳过，零绘制开销。
+            // D-002：只隐藏颜色块，检查信息里的「所属」与「所属」页签均不受影响。
+            if (!Mod_PawnOwnership.ShowMarkers) return;
+
             // 每 60 帧刷新一次玩家颜色缓存
             if (Time.frameCount - lastColorRefreshFrame >= 60)
             {
@@ -449,6 +480,7 @@ namespace PawnOwnership
         
         private void DrawMarkerAt(Vector3 pos, string owner)
         {
+            MarkersDrawnLastFrame++;
             Color color = GetPlayerColor(owner);
             pos.y = AltitudeLayer.MetaOverlays.AltitudeFor() + 0.1f;
             

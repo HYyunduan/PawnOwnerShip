@@ -146,3 +146,42 @@ MIT License
 - 初始版本
 - 工作过滤
 - 多人同步
+
+---
+
+## 测试与门禁
+
+### 归属颜色块开关
+
+- 入口：Mod 设置页复选框、地图左上按钮，二者共享同一状态。
+- 状态存于本地 `ModSettings`，不参与 MP 同步，各客户端独立。
+- 仅控制颜色块显示，不影响 InspectString 与 ITab。
+
+### 门禁命令
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/harness/run-tests.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/harness/run-tests.ps1 -Deploy -Launch
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/harness/run-tests.ps1 -Deploy -Launch -Scenario loadsave -SaveName '<存档名>'
+```
+
+- L0：仅对补丁参数名做静态审计。
+- L1：`-Deploy -Launch`，仅作数量阈值冒烟。
+- L2：`-Deploy -Launch -Scenario loadsave -SaveName '<存档名>'`，实机载入存档。
+- 参数前置限制：`-Scenario` 要求 `-Launch`，`-Launch` 要求 `-Deploy`，`loadsave` 要求 `-SaveName`；与 31 条审计同为固定门槛。
+- 部署会写入游戏目录；测试会强制结束自己启动的进程。真实测试建议使用独立 `savedatafolder` 与存档副本，并确保 `Prefs.runInBackground=True`。
+- 本轮真实 L2 已通过（2026-10-17）：`1.6.4871` 加载存档副本 `acceptance`，L1 挂载 255 个方法；绘制数开/关/恢复为 `5/0/5`，三张截图为非空 PNG，退出码 0；原 DLL 已恢复，原存档配置哈希未变。证据在 `artifacts/runtime-acceptance/`（已忽略，不提交）。
+
+### 回归命令
+
+```powershell
+dotnet run --project tools/harness/tests/driver/DriverRegression.csproj -- artifacts/qa-driver-run
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/harness/tests/test-gate.ps1
+```
+
+### 验证边界
+
+- stub 测试不证明真实渲染，也不证明双客户端同步。
+- L1 只是数量阈值冒烟，不能证明每个补丁有效。
+- L0 只做参数名静态审计，不执行补丁逻辑。
+- 尚未做双客户端同步与设置持久化人工验收；日志中的动态 patch 继承注册失败和 `InputLegacyModule` 反射依赖错误为既有观察项，本轮未归因。

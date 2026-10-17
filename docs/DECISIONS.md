@@ -86,3 +86,17 @@
 | P7 | 玩家颜色反射找不到 `color` 时 `break`，放弃全部玩家颜色 | `MapComponent_PawnOwnership.RefreshPlayerColors` | `0MultiplayerAPI.dll` 只有 `IPlayerInfo` 接口 |
 | P8 | 移除任一 designation 即清掉整格归属 | `Patch_DesignatorManager.cs` | 同格多标记时误清 |
 | P9 | 过滤条件在单机/多人下不一致 | `JobOnThing` 无 MP 判断，其余有 | 抽 `OwnershipRuntime.Active` 可一并解决 |
+
+---
+
+### D-004 测试门禁收尾与验收边界
+
+- **状态**：本轮代码修复与 L0/L2 验收已完成（2026-10-17）；集成待双端及设置持久化人工验收。仍留在 `feat/test-gate`，不合并 `dev`/`main`。协作采用 GPT 设计审核 → dsh 实现 → GPT 独立验收。
+- **范围**：仅 `TestDriver.cs`、`run-tests.ps1`、测试 fixture 与文档；无新生产类型，无存档同步、补丁或依赖变更。回滚用 `git revert` 本轮对应提交（以提交主题 `fix(testing): enforce gate prerequisites and marker assertions` 定位）。
+- **已核实缺陷**：L2 无断言；初始关闭未真正打开；`loadsave` 的 DevMode 未捕获；门禁前置校验可绕过。
+- **已完成**：真实编译 exit 0、31/31（`NU1900` 两条网络警告）；stub 10/10、门禁失败路径 7/7、非法参数 5/5。
+- **首次启动**：隐藏运行超时，未进入场景，不计通过；随后恢复原 DLL，原存档配置哈希未变。
+- **第二次启动（本轮通过）**：独立 profile，`runInBackground=True`、`pauseOnLoad=True`，加载存档副本 `acceptance`；`1.6.4871`，L1 挂载 255 方法；L2 `markersOriginal=false`、`ownedThings=5`、绘制开/关/恢复 `5/0/5`，三张非空 PNG，退出码 0。GPT 复核截图为开/关/开；原 DLL 已恢复，原存档配置哈希未变。
+- **证据**：[`acceptance.json`](../artifacts/runtime-acceptance/acceptance.json)（`ok=true`、`restored=true`、`userFilesUnchanged=true`，candidate SHA256 `29C723D2B4668AFD4C4821DD2D7864E277D799BC6179F3A7043A14A64778E42E`）、[`scenario-report.json`](../artifacts/runtime-acceptance/scenario/scenario-report.json)。`artifacts/` 已被 `.gitignore` 忽略，仅本地留存，不提交。
+- **观察项（既有日志，未归因本轮）**：已核实的动态 patch 继承方法注册失败消息与 `InputLegacyModule` 反射依赖错误。255 只是已挂方法计数，不能据此宣称全部补丁正常；本轮不改补丁目标。
+- **验证边界**：L1 计数不证明每个补丁有效；尚未做双客户端验证，也未做 UI 点击后的设置持久化测试。stub 测试不证明真实渲染或双端同步。
