@@ -92,14 +92,11 @@ namespace PawnOwnership
         {
             if (thing == null) return;
             if (!ShouldTrackOwnership(thing)){
-                // DebugLog($"[PawnOwnerShip] SetOwner filtered:{thing.ThingID} -> {playerId}");
-                Log.Message($"[PawnOwnerShip] SetOwner filtered:{thing.ThingID} -> {playerId}");
-
+                DebugLog($"[PawnOwnerShip] SetOwner filtered:{thing.ThingID} -> {playerId}");
                 return;
             }  
             thingOwnership[thing.ThingID] = playerId;
-            // DebugLog($"[PawnOwnership] SetOwner: {thing.ThingID} -> {playerId}");
-            Log.Message($"[PawnOwnerShip] SetOwner filtered:{thing.ThingID} -> {playerId}");
+            DebugLog($"[PawnOwnerShip] SetOwner: {thing.ThingID} -> {playerId}");
         }
         
         public void SetOwner(string thingID, string playerId)

@@ -33,7 +33,7 @@ namespace PawnOwnership.Patches
                 {
                     IntVec3 cell = newDes.target.Cell;
                     MapComponent_PawnOwnership.QueueSyncMessageCell(mapId, cell.x, cell.z, miningOwner);
-                    Log.Message($"[PawnOwnership] AddDesignation (Cell, mining): {newDes.def.defName} at {cell} -> {miningOwner}");
+                    MapComponent_PawnOwnership.DebugLog($"[PawnOwnership] AddDesignation (Cell, mining): {newDes.def.defName} at {cell} -> {miningOwner}");
                 }
                 else
                 {
@@ -41,7 +41,7 @@ namespace PawnOwnership.Patches
                     if (targetThing != null)
                     {
                         MapComponent_PawnOwnership.QueueSyncMessageThing(mapId, targetThing, miningOwner);
-                        Log.Message($"[PawnOwnership] AddDesignation (Thing, mining): {newDes.def.defName} {targetThing.ThingID} -> {miningOwner}");
+                        MapComponent_PawnOwnership.DebugLog($"[PawnOwnership] AddDesignation (Thing, mining): {newDes.def.defName} {targetThing.ThingID} -> {miningOwner}");
                     }
                 }
                 return; // 处理完毕，直接返回

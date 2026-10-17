@@ -105,13 +105,16 @@ namespace PawnOwnership.Patches
         // ==========================================
         // JobOnCell Prefix
         // ==========================================
-        public static bool JobOnCell_Prefix(WorkGiver_Scanner __instance, Pawn pawn, IntVec3 c, 
+        // 注意：Harmony 按“参数名”绑定原方法参数，必须与 1.6 中的参数名逐字一致。
+        // WorkGiver_Scanner.JobOnCell(Pawn pawn, IntVec3 cell, bool forced) 的参数是 cell，
+        // 而 HasJobOnCell(Pawn pawn, IntVec3 c, bool forced) 的参数是 c，两者不同，不要统一。
+        public static bool JobOnCell_Prefix(WorkGiver_Scanner __instance, Pawn pawn, IntVec3 cell, 
             bool forced, ref Job __result)
         {
             if (forced) return true;
             
             // 防重复检查
-            var key = (pawn.thingIDNumber, c.x, c.z);
+            var key = (pawn.thingIDNumber, cell.x, cell.z);
             if (!_cellCheckSet.Add(key))
             {
                 return true;
@@ -119,7 +122,7 @@ namespace PawnOwnership.Patches
             
             try
             {
-                if (!CheckCellOwnership(pawn, c))
+                if (!CheckCellOwnership(pawn, cell))
                 {
                     __result = null;
                     return false;

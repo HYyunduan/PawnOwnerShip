@@ -30,21 +30,21 @@ namespace PawnOwnership.Patches
 
             if (diedThing == null || map == null)
             {
-                Log.Message("[PawnOwnership-DoLeavingsFor] Prefix: diedThing 或 map 为 null，跳过");
+                MapComponent_PawnOwnership.DebugLog("[PawnOwnership-DoLeavingsFor] Prefix: diedThing 或 map 为 null，跳过");
                 return;
             }
 
             var comp = map.GetComponent<MapComponent_PawnOwnership>();
             if (comp == null)
             {
-                Log.Message("[PawnOwnership-DoLeavingsFor] Prefix: MapComponent 为 null，跳过");
+                MapComponent_PawnOwnership.DebugLog("[PawnOwnership-DoLeavingsFor] Prefix: MapComponent 为 null，跳过");
                 return;
             }
 
             string owner = comp.GetOwner(diedThing);
             OwnershipInheritanceContext.PendingLeavingsOwner = owner;
 
-            Log.Message($"[PawnOwnership-DoLeavingsFor] Prefix: diedThing={diedThing.ThingID} (def={diedThing.def.defName}), owner={owner ?? "null"}, map={map.uniqueID}");
+            MapComponent_PawnOwnership.DebugLog($"[PawnOwnership-DoLeavingsFor] Prefix: diedThing={diedThing.ThingID} (def={diedThing.def.defName}), owner={owner ?? "null"}, map={map.uniqueID}");
         }
 
         // Transpiler: 在 listOfLeavingsOut?.AddRange(tmpKilledLeavings) 后插入
@@ -67,7 +67,7 @@ namespace PawnOwnership.Patches
                 return codes;
             }
 
-            Log.Message("[PawnOwnership] Transpiler: 找到 tmpKilledLeavings 字段，开始注入 IL");
+            MapComponent_PawnOwnership.DebugLog("[PawnOwnership] Transpiler: 找到 tmpKilledLeavings 字段，开始注入 IL");
 
             // 找到 listOfLeavingsOut?.AddRange(tmpKilledLeavings) 的 callvirt AddRange
             // 在其后面插入: CapturedLeavings.AddRange(tmpKilledLeavings)
@@ -86,7 +86,7 @@ namespace PawnOwnership.Patches
 
                     codes.InsertRange(i + 1, insertCodes);
                     patched = true;
-                    Log.Message($"[PawnOwnership] Transpiler: 在 IL offset {i} 后插入 CapturedLeavings.AddRange(tmpKilledLeavings)");
+                    MapComponent_PawnOwnership.DebugLog($"[PawnOwnership] Transpiler: 在 IL offset {i} 后插入 CapturedLeavings.AddRange(tmpKilledLeavings)");
                     break;
                 }
             }
@@ -102,18 +102,18 @@ namespace PawnOwnership.Patches
         // Postfix: 从 CapturedLeavings 取出物品，应用归属
         static void Postfix(Map map)
         {
-            Log.Message($"[PawnOwnership-DoLeavingsFor] Postfix: CapturedLeavings.Count={OwnershipInheritanceContext.CapturedLeavings.Count}, PendingOwner={OwnershipInheritanceContext.PendingLeavingsOwner ?? "null"}");
+            MapComponent_PawnOwnership.DebugLog($"[PawnOwnership-DoLeavingsFor] Postfix: CapturedLeavings.Count={OwnershipInheritanceContext.CapturedLeavings.Count}, PendingOwner={OwnershipInheritanceContext.PendingLeavingsOwner ?? "null"}");
 
             if (string.IsNullOrEmpty(OwnershipInheritanceContext.PendingLeavingsOwner))
             {
-                Log.Message("[PawnOwnership-DoLeavingsFor] Postfix: 无待继承归属，跳过");
+                MapComponent_PawnOwnership.DebugLog("[PawnOwnership-DoLeavingsFor] Postfix: 无待继承归属，跳过");
                 OwnershipInheritanceContext.CapturedLeavings.Clear();
                 return;
             }
 
             if (OwnershipInheritanceContext.CapturedLeavings.Count == 0)
             {
-                Log.Message("[PawnOwnership-DoLeavingsFor] Postfix: CapturedLeavings 为空！Transpiler 可能未生效");
+                MapComponent_PawnOwnership.DebugLog("[PawnOwnership-DoLeavingsFor] Postfix: CapturedLeavings 为空！Transpiler 可能未生效");
                 OwnershipInheritanceContext.PendingLeavingsOwner = null;
                 return;
             }
@@ -121,7 +121,7 @@ namespace PawnOwnership.Patches
             var comp = map?.GetComponent<MapComponent_PawnOwnership>();
             if (comp == null)
             {
-                Log.Message("[PawnOwnership-DoLeavingsFor] Postfix: MapComponent 为 null");
+                MapComponent_PawnOwnership.DebugLog("[PawnOwnership-DoLeavingsFor] Postfix: MapComponent 为 null");
                 OwnershipInheritanceContext.CapturedLeavings.Clear();
                 OwnershipInheritanceContext.PendingLeavingsOwner = null;
                 return;
@@ -132,10 +132,10 @@ namespace PawnOwnership.Patches
             {
                 if (thing == null) continue;
                 comp.SetOwner(thing, owner);
-                Log.Message($"[PawnOwnership-DoLeavingsFor] Postfix: {thing.ThingID} -> {owner}");
+                MapComponent_PawnOwnership.DebugLog($"[PawnOwnership-DoLeavingsFor] Postfix: {thing.ThingID} -> {owner}");
             }
 
-            Log.Message($"[PawnOwnership-DoLeavingsFor] Postfix: 完成，共 {OwnershipInheritanceContext.CapturedLeavings.Count} 个物品继承归属 -> {owner}");
+            MapComponent_PawnOwnership.DebugLog($"[PawnOwnership-DoLeavingsFor] Postfix: 完成，共 {OwnershipInheritanceContext.CapturedLeavings.Count} 个物品继承归属 -> {owner}");
 
             OwnershipInheritanceContext.CapturedLeavings.Clear();
             OwnershipInheritanceContext.PendingLeavingsOwner = null;
