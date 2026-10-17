@@ -25,7 +25,14 @@ param(
     [switch]$Deploy,
 
     # 游戏侧 Mod 目录
-    [string]$GameModPath = 'F:\SteamLibrary\steamapps\common\RimWorld\Mods\PawnOwnerShip'
+    [string]$GameModPath = 'F:\SteamLibrary\steamapps\common\RimWorld\Mods\PawnOwnerShip',
+
+    # 启动游戏跑 L1 冒烟（需要先 -Deploy，且能写 F:\ 与启动进程）
+    [switch]$Launch,
+
+    [string]$GameExe = 'F:\SteamLibrary\steamapps\common\RimWorld\RimWorldWin64.exe',
+
+    [int]$LaunchTimeoutSec = 150
 )
 
 $ErrorActionPreference = 'Stop'
@@ -128,16 +135,68 @@ if ($buildOk -and $Deploy) {
     }
 }
 
+# ---------------------------------------------------------------- 4b. L1 启动冒烟
+$selfTest = $null
+if ($buildOk -and $Launch) {
+    $running = Get-Process -Name 'RimWorldWin64' -ErrorAction SilentlyContinue
+    if ($running) {
+        Add-Step 'launch' $false '游戏已在运行，跳过（请先关闭游戏）'
+    }
+    elseif (-not (Test-Path $GameExe)) {
+        Add-Step 'launch' $false ("找不到游戏 exe: " + $GameExe)
+    }
+    else {
+        $selfTestFile = Join-Path $work 'selftest.json'
+        $gameLog      = Join-Path $work 'game.log'
+
+        $proc = Start-Process -FilePath $GameExe -PassThru -ArgumentList (
+            '-logFile "{0}" -po.selftest-report="{1}"' -f $gameLog, $selfTestFile)
+
+        $deadline = (Get-Date).AddSeconds($LaunchTimeoutSec)
+        while ((Get-Date) -lt $deadline) {
+            if (Test-Path $selfTestFile) { break }
+            if ($proc.HasExited) { break }
+            Start-Sleep -Milliseconds 500
+        }
+
+        $got = Test-Path $selfTestFile
+        if (-not $proc.HasExited) {
+            try { Stop-Process -Id $proc.Id -Force -ErrorAction Stop } catch { }
+        }
+
+        # 保留游戏日志便于事后排查
+        $gameLogCopy = Join-Path $artifacts ("game-" + $stamp + ".log")
+        if (Test-Path $gameLog) { Copy-Item $gameLog $gameLogCopy -Force }
+
+        if ($got) {
+            try {
+                $selfTest = Get-Content $selfTestFile -Raw | ConvertFrom-Json
+                $healthy = [bool]$selfTest.healthy
+                Add-Step 'launch' $healthy ("patchedMethods=" + $selfTest.patchedMethods +
+                    " prefix=" + $selfTest.prefixes + " postfix=" + $selfTest.postfixes +
+                    " transpiler=" + $selfTest.transpilers)
+            }
+            catch {
+                Add-Step 'launch' $false ("自检报告解析失败: " + $_.Exception.Message)
+            }
+        }
+        else {
+            Add-Step 'launch' $false ("超时 " + $LaunchTimeoutSec + "s 未生成自检报告（加载可能崩溃）。日志: " + (Split-Path -Leaf $gameLogCopy))
+        }
+    }
+}
+
 # ---------------------------------------------------------------- 5. 报告
 $failed  = @($steps | Where-Object { -not $_.ok })
 $overall = ($failed.Count -eq 0)
 
 $report = [ordered]@{
-    stage     = 'L0'
+    stage     = $(if ($Launch) { 'L1' } else { 'L0' })
     startedAt = $stamp
     ok        = $overall
     steps     = @($steps)
     dll       = $modDll
+    selfTest  = $selfTest
 }
 $reportPath = Join-Path $artifacts 'gate-report.json'
 $report | ConvertTo-Json -Depth 6 | Set-Content -Path $reportPath -Encoding UTF8

@@ -3,6 +3,7 @@ using UnityEngine;
 using Verse;
 using Multiplayer.API;
 using PawnOwnership.Patches;
+using PawnOwnership.Testing;
 
 namespace PawnOwnership
 {
@@ -24,7 +25,10 @@ namespace PawnOwnership
             
             // 再注册动态 patch
             HarmonyDynamicPatches.RegisterDynamicPatches(harmony);
-            
+
+            // 启动自检（仅在带 -po.selftest-report=<path> 启动时生效）
+            SelfTest.RunIfRequested(harmony);
+
             Log.Message("[PawnOwnership] Mod 初始化成功！");
         }
 

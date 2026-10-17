@@ -22,7 +22,14 @@ namespace PatchAudit
     {
         public string Name;
         public List<string> Params = new List<string>();
-        public override string ToString() => Name + "(" + string.Join(", ", Params) + ")";
+        public bool IsAbstract;
+        public bool IsVirtual;
+        public bool IsStatic;
+        public override string ToString()
+        {
+            string flags = (IsStatic ? "static " : "") + (IsVirtual ? "virtual " : "") + (IsAbstract ? "abstract " : "");
+            return flags + Name + "(" + string.Join(", ", Params) + ")";
+        }
     }
 
     internal sealed class TypeInfo2
@@ -70,7 +77,13 @@ namespace PatchAudit
                     foreach (var mh in td.GetMethods())
                     {
                         var md = reader.GetMethodDefinition(mh);
-                        var mi = new MethodInfo2 { Name = reader.GetString(md.Name) };
+                        var mi = new MethodInfo2
+                        {
+                            Name = reader.GetString(md.Name),
+                            IsAbstract = (md.Attributes & MethodAttributes.Abstract) != 0,
+                            IsVirtual = (md.Attributes & MethodAttributes.Virtual) != 0,
+                            IsStatic = (md.Attributes & MethodAttributes.Static) != 0,
+                        };
                         foreach (var ph in md.GetParameters())
                         {
                             var pd = reader.GetParameter(ph);
