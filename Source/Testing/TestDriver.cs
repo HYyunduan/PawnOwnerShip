@@ -821,6 +821,21 @@ namespace PawnOwnership.Testing
             notes.Add("测试区：" + detail + "，作物=" + rice.defName);
             notes.Add("归属设定：区域=" + zoneOwner + "（" + (sameOwner ? "对照组：同归属" : "实验组：他人归属") + "），小人(" + pawn.LabelShort + ")=" + SelfOwner);
 
+            // 关键：写入后必须回读，确认归属真的落库了。
+            // 若读回为空，说明"过滤不生效"只是因为没有归属，而不是补丁没绑定。
+            string pawnOwnerRead = pawn.GetOwner();
+            string zoneOwnerRead = comp.GetOwnerZone(zone.ID);
+            bool worldCompOk = Find.World.GetComponent<OwnershipWorldComponent>() != null;
+            notes.Add("回读：小人归属=" + (pawnOwnerRead ?? "null")
+                      + "，区域归属=" + (zoneOwnerRead ?? "null")
+                      + "，世界组件=" + (worldCompOk ? "存在" : "null"));
+            if (string.IsNullOrEmpty(pawnOwnerRead) || string.IsNullOrEmpty(zoneOwnerRead))
+            {
+                notes.Add("警告：归属写入失败，本次观察无效");
+                Finish(false, "归属写入后回读为空，过滤不生效属于预期行为");
+                yield break;
+            }
+
             for (int i = 0; i < 20; i++) yield return null;
             Capture("01-before.png");
 
