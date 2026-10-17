@@ -119,8 +119,8 @@ if ($Scenario -and -not $Launch) {
 if ($Launch -and -not $Deploy) {
     $inputErrors += "指定 -Launch 时必须同时指定 -Deploy"
 }
-if ($Scenario -notin @('', 'quickstart', 'loadsave', 'quicktest', 'ownership')) {
-    $inputErrors += ("-Scenario 只允许 ''/quickstart/loadsave/quicktest/ownership（当前: " + $Scenario + "）")
+if ($Scenario -notin @('', 'quickstart', 'loadsave', 'quicktest', 'ownership', 'cropprobe', 'markerprobe')) {
+    $inputErrors += ("-Scenario 只允许 ''/quickstart/loadsave/quicktest/ownership/cropprobe/markerprobe（当前: " + $Scenario + "）")
 }
 if ($Scenario -eq 'loadsave' -and [string]::IsNullOrWhiteSpace($SaveName)) {
     $inputErrors += "Scenario=loadsave 时必须提供 -SaveName"
