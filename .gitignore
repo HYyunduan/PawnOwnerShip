@@ -5,3 +5,5 @@ update.bat
 
 [Bb]in/
 [Oo]bj/
+
+artifacts/
