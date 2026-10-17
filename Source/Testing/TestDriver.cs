@@ -95,6 +95,14 @@ namespace PawnOwnership.Testing
             return string.Equals(scenario, MarkerProbeScenario, StringComparison.OrdinalIgnoreCase);
         }
 
+        /// <summary>作物选择生效性测试场景名。</summary>
+        private const string CropProbeScenario = "cropprobe";
+
+        private bool IsCropProbeScenario()
+        {
+            return string.Equals(scenario, CropProbeScenario, StringComparison.OrdinalIgnoreCase);
+        }
+
         /// <summary>探针用的锚点：已设归属物品的格子坐标（用于投影到屏幕坐标）。</summary>
         private readonly List<IntVec3> probeAnchors = new List<IntVec3>();
 
@@ -245,6 +253,16 @@ namespace PawnOwnership.Testing
                         }
                         return;
                     }
+                    if (IsCropProbeScenario())
+                    {
+                        // 作物选择生效性：单位置跑断言，不需要截图。
+                        if (!probeStarted)
+                        {
+                            probeStarted = true;
+                            RunCropCases();
+                        }
+                        return;
+                    }
                     PrepareScene();
                     Enter(Phase.CaptureOn);
                     break;
@@ -304,7 +322,7 @@ namespace PawnOwnership.Testing
 
             // ownership 场景必须在真实地图上跑用例，因此和 loadsave 一样需要存档。
             // 不能走 quickstart：QuickStarter.CheckQuickStart() 经实测无任何效果（见 docs/DECISIONS.md F3）。
-            if (scenario == "loadsave" || scenario == "ownership" || IsMarkerProbeScenario())
+            if (scenario == "loadsave" || scenario == "ownership" || IsMarkerProbeScenario() || IsCropProbeScenario())
             {
                 if (string.IsNullOrEmpty(saveName))
                 {
@@ -716,6 +734,21 @@ namespace PawnOwnership.Testing
                   + best + "，阈值 " + threshold.ToString("F1") + "）");
         }
 
+        /// <summary>作物选择生效性测试：调用 CropCases.RunAll，把结果并入驱动报告。</summary>
+        private void RunCropCases()
+        {
+            try
+            {
+                bool ok = CropCases.RunAll(outDir);
+                notes.Add("CropCases.RunAll 返回 " + ok);
+                Finish(ok, ok ? null : "详见 crop-report.json");
+            }
+            catch (Exception ex)
+            {
+                Fail("CropCases 异常: " + ex);
+            }
+        }
+
         private void Finish(bool ok, string error)
         {
             if (finished) return;
@@ -731,7 +764,7 @@ namespace PawnOwnership.Testing
 
             // 标记场景专用断言：绘制数 + 三张截图。ownership 场景不出图，绝不套用这些判定，
             // 否则永远不会通过（ownedCount/markersOnDrawn 均为 0、png 不存在）。
-            if (ok && !IsOwnershipScenario() && !IsMarkerProbeScenario())
+            if (ok && !IsOwnershipScenario() && !IsMarkerProbeScenario() && !IsCropProbeScenario())
             {
                 var failures = new List<string>();
                 if (ownedCount <= 0) failures.Add("ownedCount=" + ownedCount + " (预期>0)");
