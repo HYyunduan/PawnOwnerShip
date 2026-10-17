@@ -1123,9 +1123,136 @@ namespace PawnOwnership.Testing
             notes.Add("M02 异归属拦截（CheckThingOwnership=false）=" + foreignBlocked);
             notes.Add("M03 候选列表过滤（MP 门控）=" + candidateFilterOk + "；" + filterDetail);
 
-            bool pass = sameAllowed && foreignBlocked && candidateFilterOk;
-            notes.Add("判定：" + (pass ? "归属过滤在联机下按预期生效" : "归属过滤行为不符合预期"));
-            Finish(pass, pass ? null : "归属过滤未按预期生效，详见 M01/M02/M03");
+            // ---- B01 建造拦截：蓝图归属他人时，非强制工作应被拦截，强制命令应放行 ----
+            string blueprintDetail;
+            Thing blueprint = TryCreateBlueprint(map, pawn, out blueprintDetail);
+            bool buildBlockedUnforced = false;
+            bool buildAllowedForced = false;
+            bool buildAllowedSameOwner = false;
+            if (blueprint != null)
+            {
+                string origBp = comp.GetOwner(blueprint);
+                try
+                {
+                    pawn.SetOwner(SelfOwner);
+                    comp.SetOwner(blueprint, OtherOwner);
+
+                    var scanner = DefDatabase<WorkGiverDef>.GetNamed("ConstructDeliverResourcesToBlueprints", false)?.Worker as WorkGiver_Scanner;
+                    Job dummy = null;
+                    buildBlockedUnforced = !PatchHelpers.JobOnThing_Prefix(scanner, pawn, blueprint, false, ref dummy);
+                    buildAllowedForced = PatchHelpers.JobOnThing_Prefix(scanner, pawn, blueprint, true, ref dummy);
+
+                    comp.SetOwner(blueprint, SelfOwner);
+                    Job dummy2 = null;
+                    buildAllowedSameOwner = PatchHelpers.JobOnThing_Prefix(scanner, pawn, blueprint, false, ref dummy2);
+                }
+                finally
+                {
+                    try { comp.SetOwner(blueprint, origBp); } catch { }
+                    try { blueprint.Destroy(DestroyMode.Vanish); } catch { }
+                }
+            }
+            notes.Add("B01 蓝图测试：" + blueprintDetail);
+            notes.Add("B01a 异归属 + 非强制 → 拦截（期望 True）=" + buildBlockedUnforced);
+            notes.Add("B01b 异归属 + 强制命令 → 放行（期望 True）=" + buildAllowedForced);
+            notes.Add("B01c 同归属 + 非强制 → 放行（期望 True）=" + buildAllowedSameOwner);
+
+            // ---- B02 区域拦截：种植区归属他人时，该区域格子应被拦截 ----
+            string zoneDetail;
+            IntVec3 zoneCell;
+            Zone_Growing zone = CropCases.BuildGrowingZone(map, pawn, out zoneDetail, out zoneCell);
+            bool zoneBlocked = false;
+            bool zoneAllowed = false;
+            if (zone != null)
+            {
+                try
+                {
+                    pawn.SetOwner(SelfOwner);
+                    comp.SetOwnerZone(zone.ID, OtherOwner);
+                    zoneBlocked = !InvokeCheckCellOwnership(pawn, zoneCell);
+
+                    comp.SetOwnerZone(zone.ID, SelfOwner);
+                    zoneAllowed = InvokeCheckCellOwnership(pawn, zoneCell);
+                }
+                finally
+                {
+                    try { comp.RemoveOwnerZone(zone.ID); } catch { }
+                    try { zone.Delete(); } catch { }
+                }
+            }
+            notes.Add("B02 种植区测试：" + zoneDetail);
+            notes.Add("B02a 区域归属他人 → 该格被拦截（期望 True）=" + zoneBlocked);
+            notes.Add("B02b 区域归属自己 → 该格放行（期望 True）=" + zoneAllowed);
+
+            bool pass = sameAllowed && foreignBlocked && candidateFilterOk
+                        && (blueprint == null || (buildBlockedUnforced && buildAllowedForced && buildAllowedSameOwner))
+                        && (zone == null || (zoneBlocked && zoneAllowed));
+
+            notes.Add("判定：" + (pass ? "归属过滤在联机下按预期生效（含建造/种植区路径）" : "归属过滤行为不符合预期"));
+            Finish(pass, pass ? null : "归属过滤未按预期生效，详见 M/B 系列");
+        }
+
+        /// <summary>用反射调用 GenConstruct.PlaceBlueprintForBuild（参数名映射，未用参数用 Type.Missing）。</summary>
+        private static Thing TryCreateBlueprint(Map map, Pawn pawn, out string detail)
+        {
+            detail = "";
+            try
+            {
+                BuildableDef def = DefDatabase<ThingDef>.GetNamed("SunLamp", false);
+                if (def == null) { detail = "找不到 SunLamp 定义"; return null; }
+
+                IntVec3 cell = IntVec3.Invalid;
+                foreach (IntVec3 c in CellRect.CenteredOn(pawn.Position, 8).Cells)
+                {
+                    if (!c.InBounds(map)) continue;
+                    if (c.Fogged(map) || map.roofGrid.Roofed(c)) continue;
+                    if (map.thingGrid.ThingsListAt(c).Count > 0) continue;
+                    if (!GenConstruct.CanPlaceBlueprintAt(def, c, Rot4.North, map).Accepted) continue;
+                    cell = c;
+                    break;
+                }
+
+                if (!cell.IsValid) { detail = "附近没有可放置蓝图空地"; return null; }
+
+                MethodInfo m = typeof(GenConstruct).GetMethod("PlaceBlueprintForBuild",
+                    BindingFlags.Public | BindingFlags.Static);
+                if (m == null) { detail = "找不到 GenConstruct.PlaceBlueprintForBuild"; return null; }
+
+                ParameterInfo[] ps = m.GetParameters();
+                object[] args = new object[ps.Length];
+                for (int i = 0; i < ps.Length; i++)
+                {
+                    switch (ps[i].Name)
+                    {
+                        case "sourceDef": args[i] = def; break;
+                        case "center": args[i] = cell; break;
+                        case "map": args[i] = map; break;
+                        case "rotation": args[i] = Rot4.North; break;
+                        case "faction": args[i] = Faction.OfPlayer; break;
+                        case "stuff": args[i] = null; break;
+                        default: args[i] = Type.Missing; break;
+                    }
+                }
+
+                Thing bp = m.Invoke(null, args) as Thing;
+                detail = bp == null ? "创建返回 null" : ("已在 " + cell + " 创建 " + def.defName + " 蓝图");
+                return bp;
+            }
+            catch (Exception ex)
+            {
+                Exception root = ex is TargetInvocationException tie && tie.InnerException != null ? tie.InnerException : ex;
+                detail = "创建蓝图失败: " + root.GetType().Name + ": " + root.Message;
+                return null;
+            }
+        }
+
+        /// <summary>CheckCellOwnership 为私有静态方法，测试侧用反射调用。</summary>
+        private static bool InvokeCheckCellOwnership(Pawn pawn, IntVec3 cell)
+        {
+            MethodInfo m = typeof(PatchHelpers).GetMethod(
+                "CheckCellOwnership", BindingFlags.NonPublic | BindingFlags.Static);
+            if (m == null) return true;
+            return (bool)m.Invoke(null, new object[] { pawn, cell });
         }
 
         /// <summary>CheckThingOwnership 为私有静态方法，测试侧用反射调用。</summary>
