@@ -81,6 +81,7 @@ namespace PawnOwnership.Testing
                 driver.saveName = saveName;
                 driver.outDir = outDir;
                 driver.originalShowMarkers = Mod_PawnOwnership.ShowMarkers;
+                driver.originalDevMode = Prefs.DevMode;
 
                 Log.Message("[PawnOwnership][TestDriver] 已启动：scenario=" + scenario
                             + ", save=" + (saveName ?? "(none)") + ", out=" + outDir);
@@ -214,7 +215,6 @@ namespace PawnOwnership.Testing
                 return;
             }
 
-            originalDevMode = Prefs.DevMode;
             Prefs.DevMode = true;
             notes.Add("已临时开启 Prefs.DevMode");
 
@@ -266,8 +266,7 @@ namespace PawnOwnership.Testing
             var comp = map.GetComponent<MapComponent_PawnOwnership>();
             if (comp == null)
             {
-                notes.Add("MapComponent_PawnOwnership 为 null");
-                return;
+                throw new InvalidOperationException("MapComponent_PawnOwnership 为 null");
             }
 
             int n = 0;
@@ -287,6 +286,11 @@ namespace PawnOwnership.Testing
             ownedCount = n;
             notes.Add("已为 " + n + " 个物品设置归属 SelfTest");
 
+            if (n == 0)
+            {
+                throw new InvalidOperationException("没有可设置归属的测试物品");
+            }
+
             if (focus.IsValid)
             {
                 Find.CameraDriver.JumpToCurrentMapLoc(focus);
@@ -296,6 +300,8 @@ namespace PawnOwnership.Testing
             {
                 notes.Add("没找到可设置归属的物品");
             }
+
+            SetMarkers(true);
         }
 
         private void SetMarkers(bool on)
@@ -347,6 +353,26 @@ namespace PawnOwnership.Testing
         private void Finish(bool ok, string error)
         {
             if (finished) return;
+            if (ok)
+            {
+                var failures = new List<string>();
+                if (ownedCount <= 0) failures.Add("ownedCount=" + ownedCount + " (预期>0)");
+                if (markersOnDrawn <= 0) failures.Add("markersOnDrawn=" + markersOnDrawn + " (预期>0)");
+                if (markersOffDrawn != 0) failures.Add("markersOffDrawn=" + markersOffDrawn + " (预期=0)");
+                if (markersBackDrawn <= 0) failures.Add("markersBackDrawn=" + markersBackDrawn + " (预期>0)");
+                foreach (string f in new[] { "01-markers-on.png", "02-markers-off.png", "03-markers-back.png" })
+                {
+                    string p = Path.Combine(outDir, f);
+                    if (!File.Exists(p)) failures.Add(f + " 不存在");
+                    else if (new FileInfo(p).Length <= 0) failures.Add(f + " 为空");
+                }
+                if (failures.Count > 0)
+                {
+                    ok = false;
+                    error = string.Join("; ", failures.ToArray());
+                    notes.Add(error);
+                }
+            }
             finished = true;
             phase = Phase.Finished;
 
