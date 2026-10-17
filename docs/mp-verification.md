@@ -107,3 +107,66 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\harness\run-mp-tests.p
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\harness\run-mp-tests.ps1 -SaveName '新移民1'
 ```
 输出中查看 M01–M03、B01a–c、B02a–b。
+---
+
+## 真实 bug 复现：种植作物错配（2026-10-17）
+
+### 现象
+
+同一片种植区设定作物后，派出的播种任务却带着**另一种作物**，且重置任务无效。
+
+### 复现方法（联机门禁客户端内）
+
+1. 建两个种植区：A 设为水稻、B 设为土豆（都必须建在 `fertility > 0` 的地形上，且要 `RegisterZone` 注册到 `AllZones`，否则扫描返回 0 格）
+2. 走一遍 `WorkGiver_GrowerSow.PotentialWorkCellsGlobal(pawn)` 扫描
+3. 对扫描到的每个格子调用 `JobOnCell`，比较 `job.plantDefToSow` 与该格所在区域的作物
+
+### 实测结果
+
+```
+扫描到 18 格
+播种任务 9 格
+错配 6 格
+作物错配：格 (155,0,167) 区域期望 Plant_Potato，实际派活 Plant_Rice
+作物错配：格 (156,0,167) 区域期望 Plant_Potato，实际派活 Plant_Rice
+作物错配：格 (157,0,167) 区域期望 Plant_Potato，实际派活 Plant_Rice
+```
+
+**土豆区派出了水稻任务** —— 与玩家反馈"选水稻却种土豆"是同一机制（方向相反，取决于区域遍历顺序）。
+
+### 根因（高置信度）
+
+`WorkGiver_GrowerSow` 依赖 `WorkGiver_Grower.wantedPlantDef` 这一**实例字段**保存当前要种的作物，
+正常情况下由扫描流程"每产出一格就设置一次"，与 `JobOnCell` 逐格调用**交错**进行。
+
+而我们的后置补丁在联机下会把惰性枚举**提前物化**：
+
+```csharp
+// Source/Patches/PatchHelpers.cs
+var resultList = __result.ToList();                 // ← 破坏交错
+return resultList.Where(...).ToList();
+```
+
+物化后，`wantedPlantDef` 停留在最后一次扫描的区域作物上；随后 `ScanJobs` 再逐格调用 `JobOnCell` 时，
+所有格子都拿到这个残留作物 → 整片区域种错。
+
+**这解释了全部特征**：
+- 只在联机出现（单机时后置直接 `return __result`，不物化）
+- 偶现（取决于区域遍历顺序、扫描时机、区域内格子数量）
+- "只能种一种"（所有区域被同一种残留作物覆盖）
+- 关掉模组即恢复（后置不执行）
+
+### 修复方向（待审核）
+
+把两个候选过滤后置从"提前物化"改为**惰性过滤**，保持原有的交错求值语义：
+
+```csharp
+private static IEnumerable<Thing> FilterThingsLazily(IEnumerable<Thing> src, Pawn pawn, ...)
+{
+    foreach (Thing t in src)
+        if (IsThingAccessible(pawn, t, comp, pawnOwner)) yield return t;
+}
+```
+
+影响文件：`Source/Patches/PatchHelpers.cs`（`PotentialWorkThingsGlobal_Postfix` / `PotentialWorkCellsGlobal_Postfix`）。
+改动很小，但属于产品逻辑修改，需维护者批准。

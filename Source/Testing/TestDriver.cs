@@ -1184,9 +1184,95 @@ namespace PawnOwnership.Testing
             notes.Add("B02a 区域归属他人 → 该格被拦截（期望 True）=" + zoneBlocked);
             notes.Add("B02b 区域归属自己 → 该格放行（期望 True）=" + zoneAllowed);
 
+            // ---- B03 作物错配检测（真实 bug：选水稻却种土豆）----
+            // 假设：MP 下我们的 PotentialWorkCellsGlobal 后置把惰性枚举物化，
+            // 导致 WorkGiver_GrowerSow 的 wantedPlantDef 缓存停留在最后一次计算的结果，
+            // 于是逐格派活时用错作物。
+            string cropDetail = "未执行";
+            int cropChecked = 0;
+            int cropMismatch = 0;
+            int cropNullOrOther = 0;
+            int cropNullCrop = 0;
+            ThingDef rice = DefDatabase<ThingDef>.GetNamed("Plant_Rice", false);
+            ThingDef potato = DefDatabase<ThingDef>.GetNamed("Plant_Potato", false);
+            var cropGiver = DefDatabase<WorkGiverDef>.GetNamed("GrowerSow", false)?.Worker as WorkGiver_GrowerSow;
+
+            if (rice != null && potato != null && cropGiver != null)
+            {
+                Zone_Growing zoneB = null;
+                Zone_Growing zoneA = null;
+                try
+                {
+                    // 区域 A：起点=小人位置（水稻）
+                    IntVec3 originA = pawn.Position;
+                    zoneA = BuildZoneNear(map, originA, rice, out IntVec3 cellA);
+                    // 区域 B：偏移一段距离（土豆），确保与 A 不相邻
+                    IntVec3 originB = new IntVec3(originA.x + 14, 0, originA.z + 14);
+                    zoneB = BuildZoneNear(map, originB, potato, out IntVec3 cellB);
+
+                    if (zoneA != null && zoneB != null)
+                    {
+                        // 模拟一次完整扫描：这一步在 MP 下会触发我们的后置物化
+                        List<IntVec3> scanned = cropGiver.PotentialWorkCellsGlobal(pawn).ToList();
+
+                        foreach (IntVec3 c in scanned)
+                        {
+                            Zone_Growing at = map.zoneManager.ZoneAt(c) as Zone_Growing;
+                            if (at == null) continue;
+                            if (at != zoneA && at != zoneB) continue;
+
+                            ThingDef expected = at.GetPlantDefToGrow();
+                            if (expected == null) continue;
+
+                            Job j = cropGiver.JobOnCell(pawn, c, false);
+                            if (j == null || j.def != JobDefOf.Sow)
+                            {
+                                cropNullOrOther++;
+                                if (cropNullOrOther <= 2)
+                                {
+                                    notes.Add("  非播种任务：格 " + c + " 任务="
+                                              + (j == null ? "null" : (j.def == null ? "null def" : j.def.defName)));
+                                }
+                                continue;
+                            }
+
+                            cropChecked++;
+                            if (j.plantDefToSow != expected)
+                            {
+                                cropMismatch++;
+                                if (j.plantDefToSow == null) cropNullCrop++;
+                                if (cropMismatch <= 3)
+                                {
+                                    notes.Add("  作物错配：格 " + c + " 区域期望 "
+                                              + (expected == null ? "null" : expected.defName)
+                                              + "，实际派活 " + (j.plantDefToSow == null ? "null" : j.plantDefToSow.defName));
+                                }
+                            }
+                        }
+
+                        cropDetail = "扫描到 " + scanned.Count + " 格，播种任务 " + cropChecked
+                                     + " 格（错配 " + cropMismatch + "，其中作物为 null 的 " + cropNullCrop + "）"
+                                     + "，非播种/空任务 " + cropNullOrOther + " 格";
+                    }
+                    else
+                    {
+                        cropDetail = "区域创建失败（A=" + (zoneA != null) + "，B=" + (zoneB != null) + "）";
+                    }
+                }
+                finally
+                {
+                    try { if (zoneB != null) zoneB.Delete(); } catch { }
+                    try { if (zoneA != null) zoneA.Delete(); } catch { }
+                }
+            }
+
+            notes.Add("B03 作物错配检测：" + cropDetail);
+            notes.Add("B03 判定：作物" + (cropMismatch == 0 ? "全部正确（未复现）" : "出现错配（复现真实 bug）"));
+
             bool pass = sameAllowed && foreignBlocked && candidateFilterOk
                         && (blueprint == null || (buildBlockedUnforced && buildAllowedForced && buildAllowedSameOwner))
-                        && (zone == null || (zoneBlocked && zoneAllowed));
+                        && (zone == null || (zoneBlocked && zoneAllowed))
+                        && cropMismatch == 0;
 
             notes.Add("判定：" + (pass ? "归属过滤在联机下按预期生效（含建造/种植区路径）" : "归属过滤行为不符合预期"));
             Finish(pass, pass ? null : "归属过滤未按预期生效，详见 M/B 系列");
@@ -1242,6 +1328,46 @@ namespace PawnOwnership.Testing
             {
                 Exception root = ex is TargetInvocationException tie && tie.InnerException != null ? tie.InnerException : ex;
                 detail = "创建蓝图失败: " + root.GetType().Name + ": " + root.Message;
+                return null;
+            }
+        }
+
+        /// <summary>在指定中心附近建一个种植区并设定作物，返回区域与首个格。</summary>
+        private static Zone_Growing BuildZoneNear(Map map, IntVec3 origin, ThingDef crop, out IntVec3 testCell)
+        {
+            testCell = IntVec3.Invalid;
+            try
+            {
+                var zone = new Zone_Growing(map.zoneManager);
+                // 仅 new 不注册到 AllZones，而 WorkGiver_Grower.PotentialWorkCellsGlobal 是遍历 AllZones 的，
+                // 不注册会导致扫描返回 0 格（测试会假通过）。
+                if (!map.zoneManager.AllZones.Contains(zone))
+                {
+                    map.zoneManager.RegisterZone(zone);
+                }
+
+                int added = 0;
+                foreach (IntVec3 c in CellRect.CenteredOn(origin, 5).Cells)
+                {
+                    if (!c.InBounds(map)) continue;
+                    if (c.Fogged(map) || map.roofGrid.Roofed(c)) continue;
+                    if (map.zoneManager.ZoneAt(c) != null) continue;
+                    if (map.thingGrid.ThingsListAt(c).Count > 0) continue;
+                    // 必须是可种植地形，否则扫描不会返回该格，测试会假通过
+                    if (map.terrainGrid.TerrainAt(c).fertility <= 0f) continue;
+
+                    try { zone.AddCell(c); added++; } catch { }
+                    if (added >= 9) break;
+                }
+
+                if (added == 0) { zone.Delete(); return null; }
+
+                zone.SetPlantDefToGrow(crop);
+                testCell = zone.Cells.First();
+                return zone;
+            }
+            catch
+            {
                 return null;
             }
         }
