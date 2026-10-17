@@ -33,8 +33,42 @@ namespace PawnOwnership.Testing
         public static void RunIfRequested(Harmony harmony)
         {
             MpTestBoot.ParseIfRequested();
+            EnableBackgroundRunning();
             WritePatchReportIfRequested(harmony);
             StartScenarioIfRequested();
+        }
+
+        /// <summary>
+        /// 自动化运行时强制"后台运行"。
+        ///
+        /// 原因：Unity 在窗口失去焦点时会降速甚至暂停（RimWorld 由 Prefs.RunInBackground 控制），
+        /// 无人值守的自动化测试窗口通常没有焦点，表现为"启动期假死"——必须手动点一下窗口才继续。
+        /// 仅在带测试参数时启用，不影响正常游玩。
+        /// </summary>
+        internal static void EnableBackgroundRunning()
+        {
+            try
+            {
+                // 注意：参数形式是 -po.selftest-scenario=xxx（含值），
+                // CommandLineArgPassed 只匹配 "-key" 精确形式，这里必须用 TryGetCommandLineArg。
+                string ignored;
+                bool anyTestArg =
+                    GenCommandLine.TryGetCommandLineArg("po.selftest-scenario", out ignored)
+                    || GenCommandLine.TryGetCommandLineArg("po.selftest-report", out ignored)
+                    || GenCommandLine.TryGetCommandLineArg("po.selftest-mp", out ignored)
+                    || GenCommandLine.TryGetCommandLineArg("po.selftest-out", out ignored);
+
+                if (!anyTestArg) return;
+
+                Prefs.RunInBackground = true;
+                UnityEngine.Application.runInBackground = true;
+                Log.Message("[PawnOwnership][SelfTest] 已启用后台运行（Prefs.RunInBackground=true），"
+                            + "避免窗口失焦导致启动停滞");
+            }
+            catch (Exception ex)
+            {
+                Log.Warning("[PawnOwnership][SelfTest] 启用后台运行失败: " + ex.Message);
+            }
         }
 
         private static void WritePatchReportIfRequested(Harmony harmony)

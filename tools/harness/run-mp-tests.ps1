@@ -70,6 +70,41 @@ function Stop-TestProcess {
     }
 }
 
+# ---- 窗口聚焦辅助 ----
+# Unity 在窗口失去焦点时会降速/暂停（RimWorld 由 Prefs.RunInBackground 控制）。
+# 自动化测试窗口若没有焦点，会出现"启动期假死"，必须手动点一下窗口才继续。
+try {
+    Add-Type -Namespace POWin -Name Focus -MemberDefinition @"
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+[DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+"@ -ErrorAction SilentlyContinue
+} catch { }
+
+function Focus-GameWindow {
+    param($Proc, [int]$TimeoutSec = 30)
+    if (-not $Proc) { return $false }
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $Proc.Refresh()
+            if ($Proc.HasExited) { return $false }
+            $h = $Proc.MainWindowHandle
+            if ($h -ne [IntPtr]::Zero) {
+                try { $ws = New-Object -ComObject WScript.Shell; [void]$ws.AppActivate($Proc.Id) } catch { }
+                try {
+                    [void][POWin.Focus]::ShowWindow($h, 9)
+                    [void][POWin.Focus]::BringWindowToTop($h)
+                    [void][POWin.Focus]::SetForegroundWindow($h)
+                } catch { }
+                return $true
+            }
+        } catch { }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
+
 try {
     Write-Host "== PawnOwnership 联机门禁 =="
     Write-Host "repo = $repo"
@@ -97,6 +132,8 @@ try {
     $hostArgs = '-logFile "{0}" -po.selftest-scenario={1} -po.selftest-out="{2}" -po.selftest-save="{3}" -po.selftest-mp=host' -f $hostLog, $Scenario, $hostDir, $SaveName
     $hostProc = Start-Process -FilePath $GameExe -ArgumentList $hostArgs -PassThru
     $script:procs += $hostProc
+    $hostFocused = Focus-GameWindow -Proc $hostProc -TimeoutSec 30
+    Add-Step 'host-focus' $hostFocused $(if ($hostFocused) { '已聚焦主机窗口' } else { '未取得焦点（依赖 RunInBackground 兜底）' })
 
     $hostReady = $false
     $deadline = (Get-Date).AddSeconds($HostTimeoutSec)
@@ -117,6 +154,8 @@ try {
     $clientArgs = '-logFile "{0}" -po.selftest-scenario={1} -po.selftest-out="{2}" -po.selftest-mp=client:127.0.0.1:{3}' -f $clientLog, $Scenario, $clientDir, $Port
     $clientProc = Start-Process -FilePath $GameExe -ArgumentList $clientArgs -PassThru
     $script:procs += $clientProc
+    $clientFocused = Focus-GameWindow -Proc $clientProc -TimeoutSec 30
+    Add-Step 'client-focus' $clientFocused $(if ($clientFocused) { '已聚焦客户端窗口' } else { '未取得焦点（依赖 RunInBackground 兜底）' })
 
     $clientReport = Join-Path $clientDir 'scenario-report.json'
     $deadline = (Get-Date).AddSeconds($ClientTimeoutSec)

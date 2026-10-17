@@ -64,6 +64,41 @@ function Add-Step {
     Write-Host ("[{0}] {1}  {2}" -f $mark, $Name, $Detail)
 }
 
+# ---- 窗口聚焦辅助 ----
+# Unity 在窗口失去焦点时会降速/暂停（RimWorld 由 Prefs.RunInBackground 控制）。
+# 自动化测试窗口若没有焦点，会出现"启动期假死"，必须手动点一下窗口才继续。
+try {
+    Add-Type -Namespace POWin -Name Focus -MemberDefinition @"
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+[DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+"@ -ErrorAction SilentlyContinue
+} catch { }
+
+function Focus-GameWindow {
+    param($Proc, [int]$TimeoutSec = 30)
+    if (-not $Proc) { return $false }
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $Proc.Refresh()
+            if ($Proc.HasExited) { return $false }
+            $h = $Proc.MainWindowHandle
+            if ($h -ne [IntPtr]::Zero) {
+                try { $ws = New-Object -ComObject WScript.Shell; [void]$ws.AppActivate($Proc.Id) } catch { }
+                try {
+                    [void][POWin.Focus]::ShowWindow($h, 9)
+                    [void][POWin.Focus]::BringWindowToTop($h)
+                    [void][POWin.Focus]::SetForegroundWindow($h)
+                } catch { }
+                return $true
+            }
+        } catch { }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
+
 # ownership / cropprobe 场景的逐用例结果在 <scenarioDir>/<report>.json（由 mod 侧用例类写出）。
 # 这里只负责把 total/passed/failed 汇总到 scenario 步骤的 detail；读不到就用说明文字兜底，
 # 不让展示逻辑抛异常（是否通过与 scenario-report.json 的 ok 字段收口）。
@@ -249,7 +284,11 @@ try {
                 $waitFile = $scenarioFile
             }
 
-            $proc = Start-Process -FilePath $GameExe -PassThru -ArgumentList $argLine -WindowStyle Hidden
+            # 用普通窗口启动并主动聚焦：隐藏/失焦的窗口会让 Unity 降速甚至暂停，
+            # 表现为"启动期假死"（必须手动点窗口才继续）。
+            $proc = Start-Process -FilePath $GameExe -PassThru -ArgumentList $argLine -WindowStyle Normal
+            $focused = Focus-GameWindow -Proc $proc -TimeoutSec 30
+            Write-Host ("focus: " + $(if ($focused) { '已聚焦游戏窗口' } else { '未能获取窗口焦点（依赖 mod 侧 RunInBackground 兜底）' }))
 
             $deadline = (Get-Date).AddSeconds($LaunchTimeoutSec)
             while ((Get-Date) -lt $deadline) {
