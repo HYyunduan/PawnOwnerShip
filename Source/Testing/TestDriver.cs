@@ -370,38 +370,74 @@ namespace PawnOwnership.Testing
                 throw new InvalidOperationException("MapComponent_PawnOwnership 为 null");
             }
 
-            int n = 0;
-            IntVec3 focus = IntVec3.Invalid;
+            // 优先挑「当前视野内」的物品，且必须满足可视条件：
+            //   1) 不在迷雾里；2) 头顶没有屋顶（远古遗迹/山洞/室内都会被屋顶藏住，画了也看不见）。
+            // 之前就是因为挑中了远古遗迹里的物品，导致像素比对始终为 0。
+            CellRect view = Find.CameraDriver.CurrentViewRect;
+            var picked = new List<Thing>();
+            int skippedRoof = 0, skippedFog = 0;
 
             foreach (Thing t in map.listerThings.ThingsInGroup(ThingRequestGroup.HaulableEver))
             {
                 if (t == null || t.def == null) continue;
                 if (t.def.category != ThingCategory.Item) continue;
+                if (!t.Spawned) continue;
+                if (!view.Contains(t.Position)) continue;
 
-                comp.SetOwner(t, "SelfTest");
-                probeAnchors.Add(t.Position);
-                if (n == 0) focus = t.Position;
-                n++;
-                if (n >= 5) break;
+                if (map.fogGrid.IsFogged(t.Position)) { skippedFog++; continue; }
+                if (map.roofGrid.Roofed(t.Position)) { skippedRoof++; continue; }
+
+                picked.Add(t);
+                if (picked.Count >= 50) break;
             }
 
-            ownedCount = n;
-            notes.Add("已为 " + n + " 个物品设置归属 SelfTest");
+            bool jumped = false;
+            if (picked.Count == 0)
+            {
+                // 视野里没有可搬运物品：退化为全图前 5 个，并把相机移过去。
+                foreach (Thing t in map.listerThings.ThingsInGroup(ThingRequestGroup.HaulableEver))
+                {
+                    if (t == null || t.def == null) continue;
+                    if (t.def.category != ThingCategory.Item) continue;
 
-            if (n == 0)
+                    picked.Add(t);
+                    if (picked.Count >= 5) break;
+                }
+
+                if (picked.Count > 0)
+                {
+                    Find.CameraDriver.JumpToCurrentMapLoc(picked[0].Position);
+                    jumped = true;
+                }
+            }
+
+            foreach (Thing t in picked)
+            {
+                comp.SetOwner(t, "SelfTest");
+                probeAnchors.Add(t.Position);
+            }
+
+            ownedCount = picked.Count;
+            notes.Add("设置归属的物品数=" + ownedCount
+                      + (jumped ? "（视野内没有符合可视条件的物品，已跳转相机）" : "（视野内、无屋顶、未迷雾）")
+                      + "；因屋顶跳过 " + skippedRoof + " 个，因迷雾跳过 " + skippedFog + " 个");
+
+            if (ownedCount == 0)
             {
                 throw new InvalidOperationException("没有可设置归属的测试物品");
             }
 
-            if (focus.IsValid)
-            {
-                Find.CameraDriver.JumpToCurrentMapLoc(focus);
-                notes.Add("摄像机已跳到 " + focus);
-            }
-            else
-            {
-                notes.Add("没找到可设置归属的物品");
-            }
+            // 选中第一个：检查面板会显示 mod 已有的「所属：xxx」一行。
+            // 这是**不依赖标记渲染**的可见证据，用来确认归属数据真的写进去了。
+            Thing first = picked[0];
+            Find.Selector.Select(first, false, false);
+            notes.Add("已选中 " + first.LabelShort + "（位置 " + first.Position + "），检查面板应显示 所属：SelfTest");
+
+            // 关键：把相机拉近。标记只有 0.3 格，视野 130 格时一格约 14px，
+            // 标记只有约 4px，肉眼和像素比对都几乎不可辨；拉近到 20 格视野后约 25~30px。
+            var rootPos = new Vector3(first.Position.x + 0.5f, 0f, first.Position.z + 0.5f);
+            Find.CameraDriver.SetRootPosAndSize(rootPos, 20f);
+            notes.Add("相机已拉近到视野 20 格，中心 " + first.Position);
 
             SetMarkers(true);
         }
@@ -575,6 +611,7 @@ namespace PawnOwnership.Testing
 
             SetMarkers(true);
             yield return new WaitForEndOfFrame();
+            int drawnAtCapture = MapComponent_PawnOwnership.MarkersDrawnLastFrame;
             MarkerVisibilityProbe.Frame on1 = MarkerVisibilityProbe.Capture();
             yield return new WaitForEndOfFrame();
             MarkerVisibilityProbe.Frame on2 = MarkerVisibilityProbe.Capture();
@@ -591,8 +628,18 @@ namespace PawnOwnership.Testing
             MarkerVisibilityProbe.Frame off = MarkerVisibilityProbe.Capture();
             SetMarkers(true);
 
-            notes.Add("抓帧时上一帧绘制标记数=" + MapComponent_PawnOwnership.MarkersDrawnLastFrame
+            notes.Add("抓帧时上一帧绘制标记数=" + drawnAtCapture
                       + "，DrawCalls=" + MapComponent_PawnOwnership.DrawCalls);
+
+            // 把三帧落盘，作为可独立复核的证据（在此之前这些数字没有任何对应图片）。
+            string pA = Path.Combine(outDir, "probe-A-markers-on.png");
+            string pB = Path.Combine(outDir, "probe-B-markers-on.png");
+            string pC = Path.Combine(outDir, "probe-C-markers-off.png");
+            bool okA = MarkerVisibilityProbe.SavePng(on1, pA);
+            bool okB = MarkerVisibilityProbe.SavePng(on2, pB);
+            bool okC = MarkerVisibilityProbe.SavePng(off, pC);
+            notes.Add("截图尺寸=" + on1.Width + "x" + on1.Height
+                      + "；落盘 A=" + okA + " B=" + okB + " C=" + okC);
 
             if (!off.Valid)
             {

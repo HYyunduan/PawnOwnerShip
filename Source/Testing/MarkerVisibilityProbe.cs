@@ -32,6 +32,8 @@ namespace PawnOwnership.Testing
             public int Height;
             public Color32[] Pixels;
             public bool Valid;
+            /// <summary>原始纹理，保留下来用于落盘成 PNG（证据可独立复核）。</summary>
+            public Texture2D Texture;
         }
 
         /// <summary>抓当前帧画面。必须在 WaitForEndOfFrame 之后调用。</summary>
@@ -63,6 +65,7 @@ namespace PawnOwnership.Testing
 
                 frame.Width = tex.width;
                 frame.Height = tex.height;
+                frame.Texture = tex;
                 frame.Pixels = tex.GetPixels32();
                 frame.Valid = frame.Pixels != null && frame.Pixels.Length == frame.Width * frame.Height;
             }
@@ -71,6 +74,43 @@ namespace PawnOwnership.Testing
                 Log.Error("[PawnOwnership][Probe] 抓图异常: " + ex);
             }
             return frame;
+        }
+
+        /// <summary>
+        /// 把抓到的帧写成 PNG，作为可独立复核的证据。
+        /// 编码走反射调用 UnityEngine.ImageConversion.EncodeToPNG，不新增程序集引用。
+        /// </summary>
+        public static bool SavePng(Frame frame, string path)
+        {
+            try
+            {
+                if (frame == null || frame.Texture == null) return false;
+
+                Type t = Type.GetType("UnityEngine.ImageConversion, UnityEngine.ImageConversionModule");
+                if (t == null)
+                {
+                    Log.Error("[PawnOwnership][Probe] 找不到 UnityEngine.ImageConversion");
+                    return false;
+                }
+
+                MethodInfo m = t.GetMethod("EncodeToPNG", new[] { typeof(Texture2D) });
+                if (m == null)
+                {
+                    Log.Error("[PawnOwnership][Probe] 找不到 EncodeToPNG(Texture2D)");
+                    return false;
+                }
+
+                var bytes = m.Invoke(null, new object[] { frame.Texture }) as byte[];
+                if (bytes == null || bytes.Length == 0) return false;
+
+                System.IO.File.WriteAllBytes(path, bytes);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Error("[PawnOwnership][Probe] 写 PNG 失败: " + ex);
+                return false;
+            }
         }
 
         /// <summary>整帧差异像素数（用于噪声基线与全局信号）。</summary>
