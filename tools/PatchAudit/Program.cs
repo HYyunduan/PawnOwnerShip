@@ -153,6 +153,28 @@ namespace PatchAudit
 
         private static int Main(string[] args)
         {
+            if (args.Length >= 3 && args[0] == "--find")
+            {
+                var d = AssemblyDump.Load(args[1]);
+                string member = args[2];
+                int found = 0;
+                foreach (var ti in d.ByFull.Values)
+                {
+                    bool hasMethod = ti.Methods.ContainsKey(member);
+                    bool hasField = ti.Fields.Contains(member);
+                    bool hasProp = ti.Properties.Contains(member);
+                    if (!hasMethod && !hasField && !hasProp) continue;
+                    found++;
+                    Console.WriteLine("type " + ti.FullName);
+                    if (hasMethod)
+                        foreach (var m in ti.Methods[member]) Console.WriteLine("   method    : " + m);
+                    if (hasField) Console.WriteLine("   field     : " + member);
+                    if (hasProp) Console.WriteLine("   property  : " + member);
+                }
+                if (found == 0) Console.WriteLine("未找到声明 '" + member + "' 的类型");
+                return 0;
+            }
+
             if (args.Length >= 3 && args[0] == "--dump")
             {
                 var d = AssemblyDump.Load(args[1]);
