@@ -1212,47 +1212,63 @@ namespace PawnOwnership.Testing
 
                     if (zoneA != null && zoneB != null)
                     {
-                        // 模拟一次完整扫描：这一步在 MP 下会触发我们的后置物化
-                        List<IntVec3> scanned = cropGiver.PotentialWorkCellsGlobal(pawn).ToList();
+                        // 必须给小人设置归属，否则我们的后置会走早退分支，测不到补丁。
+                        try { pawn.SetOwner(SelfOwner); } catch { }
 
-                        foreach (IntVec3 c in scanned)
+                        // 主测量：像 JobGiver_Work 一样**惰性**消费（逐格取、逐格派活）
+                        IEnumerable<IntVec3> seq = cropGiver.PotentialWorkCellsGlobal(pawn);
+                        bool seqIsList = seq is IList<IntVec3>;
+
+                        int lazyChecked = 0;
+                        int lazyMismatch = 0;
+                        foreach (IntVec3 c in seq)
                         {
                             Zone_Growing at = map.zoneManager.ZoneAt(c) as Zone_Growing;
-                            if (at == null) continue;
-                            if (at != zoneA && at != zoneB) continue;
+                            if (at == null || (at != zoneA && at != zoneB)) continue;
 
                             ThingDef expected = at.GetPlantDefToGrow();
                             if (expected == null) continue;
 
                             Job j = cropGiver.JobOnCell(pawn, c, false);
-                            if (j == null || j.def != JobDefOf.Sow)
-                            {
-                                cropNullOrOther++;
-                                if (cropNullOrOther <= 2)
-                                {
-                                    notes.Add("  非播种任务：格 " + c + " 任务="
-                                              + (j == null ? "null" : (j.def == null ? "null def" : j.def.defName)));
-                                }
-                                continue;
-                            }
+                            if (j == null || j.def != JobDefOf.Sow) continue;
 
-                            cropChecked++;
+                            lazyChecked++;
                             if (j.plantDefToSow != expected)
                             {
-                                cropMismatch++;
-                                if (j.plantDefToSow == null) cropNullCrop++;
-                                if (cropMismatch <= 3)
+                                lazyMismatch++;
+                                if (lazyMismatch <= 3)
                                 {
-                                    notes.Add("  作物错配：格 " + c + " 区域期望 "
-                                              + (expected == null ? "null" : expected.defName)
-                                              + "，实际派活 " + (j.plantDefToSow == null ? "null" : j.plantDefToSow.defName));
+                                    notes.Add("  惰性消费错配：格 " + c + " 区域期望 "
+                                              + expected.defName + "，实际 "
+                                              + (j.plantDefToSow == null ? "null" : j.plantDefToSow.defName));
                                 }
                             }
                         }
 
-                        cropDetail = "扫描到 " + scanned.Count + " 格，播种任务 " + cropChecked
-                                     + " 格（错配 " + cropMismatch + "，其中作物为 null 的 " + cropNullCrop + "）"
-                                     + "，非播种/空任务 " + cropNullOrOther + " 格";
+                        // 对照组：先物化再派活（等价于修复前的旧实现），用于证明根因
+                        List<IntVec3> materialized = cropGiver.PotentialWorkCellsGlobal(pawn).ToList();
+                        int eagerChecked = 0;
+                        int eagerMismatch = 0;
+                        foreach (IntVec3 c in materialized)
+                        {
+                            Zone_Growing at = map.zoneManager.ZoneAt(c) as Zone_Growing;
+                            if (at == null || (at != zoneA && at != zoneB)) continue;
+
+                            ThingDef expected = at.GetPlantDefToGrow();
+                            if (expected == null) continue;
+
+                            Job j = cropGiver.JobOnCell(pawn, c, false);
+                            if (j == null || j.def != JobDefOf.Sow) continue;
+
+                            eagerChecked++;
+                            if (j.plantDefToSow != expected) eagerMismatch++;
+                        }
+
+                        cropChecked = lazyChecked;
+                        cropMismatch = lazyMismatch;
+                        cropDetail = "惰性消费：检查 " + lazyChecked + " 格，错配 " + lazyMismatch
+                                     + "；返回类型是 IList=" + seqIsList
+                                     + "；对照（先物化）：检查 " + eagerChecked + " 格，错配 " + eagerMismatch;
                     }
                     else
                     {

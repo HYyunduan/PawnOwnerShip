@@ -1,107 +1,152 @@
 # 调查报告：联机下种植作物错配（选水稻却种土豆）
 
 > 日期：2026-10-17　分支：`feat/mp-test-harness`
-> 结论状态：**已复现；根因高置信度定位；修复待批准**
+> 状态：**根因已由反编译源码确认；修复已实施；联机门禁与单机回归均通过**
 
-## 一、一句话结论
+## 一、结论
 
-联机模式下，本模组的候选过滤后置补丁把 RimWorld 的**惰性枚举提前求值**，
-打乱了"产出一格 → 立刻为该格派活"的交错时序，使 `wantedPlantDef` 停留在上一次的作物上，
-于是整片种植区按同一种残留作物派活。
+联机模式下，`PotentialWorkThingsGlobal` / `PotentialWorkCellsGlobal` 的候选过滤后置补丁
+**把 RimWorld 的惰性迭代器提前物化（`ToList()`）**，导致原版迭代器内部的
+"设置作物 → 产出格子 → 清空作物" 三步与"逐格派活"的**交错关系被破坏**，
+`WorkGiver_Grower.wantedPlantDef` 被第一次派活的结果锁死，后续格子全部复用该作物，
+表现为整片区域种错作物。
 
-## 二、RimWorld 的播种数据链（涉及的 API）
+产品代码中没有一处直接修改作物 —— 被改变的是**求值时机**。
 
-| 层 | API | 作用 |
-|---|---|---|
-| 区域数据 | `Zone_Growing.plantDefToGrow`、`SetPlantDefToGrow(ThingDef)`、`GetPlantDefToGrow()` | 玩家在 UI 里选的作物 |
-| 工作器缓存 | `WorkGiver_Grower.wantedPlantDef`（实例字段） | **当前这一格**要种的作物 |
-| 候选枚举 | `WorkGiver_Grower.PotentialWorkCellsGlobal(Pawn)` → `IEnumerable<IntVec3>`（`yield` 惰性） | 列出可工作格子；迭代过程中设置 `wantedPlantDef` |
-| 派活 | `WorkGiver_GrowerSow.JobOnCell(Pawn, IntVec3, bool)` | 用当前 `wantedPlantDef` 构造任务 |
-| 任务数据 | `Job.plantDefToSow` | 任务携带的作物 |
-| 执行 | `JobDriver_PlantSow.MakeNewToils()` → `GenSpawn.Spawn(plantDefToSow, ...)` | 真正种下 |
+## 二、游戏源码（反编译自 `Assembly-CSharp.dll`，1.6.4871）
 
-原版扫描入口 `WorkGiver_Scanner.ScanJobs` 的时序是**交错**的：
-
-```
-foreach (cell in PotentialWorkCellsGlobal(pawn))   // 惰性：每 yield 一格前设置 wantedPlantDef
-    JobOnCell(pawn, cell)                          // 立刻使用当格的 wantedPlantDef
-```
-
-## 三、我们的模组改动了什么
-
-`Source/Patches/PatchHelpers.cs`：
+### 2.1 共享缓存字段
 
 ```csharp
-// 第 295 / 332 行：单机直接放行（保持惰性原样返回）
-if (!MP.enabled || !MP.IsInMultiplayer) return __result;
-
-// 第 315-316 / 352-353 行：联机下先物化再过滤
-var resultList = __result.ToList();                                  // ← 关键问题
-return resultList.Where(...).ToList();
+public abstract class WorkGiver_Grower : WorkGiver_Scanner
+{
+    protected static ThingDef wantedPlantDef;   // ★ 静态，全局共享
 ```
 
-注册位置：`Source/Patches/HarmonyDynamicPatches.cs`，对 `WorkGiver_Scanner` 的各子类统一挂后置。
+### 2.2 候选枚举：yield 迭代器，设值/清空都在迭代器内部
 
-`ToList()` 会**立即跑完**整个 `yield` 迭代器：所有区域的格子一次性产出，
-`wantedPlantDef` 被反复覆盖，最终停在其中某个区域的作物上。
-之后原版循环再逐格调用 `JobOnCell` 时，拿到的都是这个残留值。
-
-## 四、时序对比
-
-**正常（单机 / 无补丁）**
-
-```
-区域A(水稻) → wantedPlantDef=水稻 → 产出 A 的格子 → JobOnCell → 水稻任务 ✔
-区域B(土豆) → wantedPlantDef=土豆 → 产出 B 的格子 → JobOnCell → 土豆任务 ✔
-```
-
-**联机 + 我们的后置**
-
-```
-ToList(): 区域A→wantedPlantDef=水稻→产出全部A格；区域B→wantedPlantDef=土豆→产出全部B格
-之后逐格 JobOnCell: 全部使用最后的 wantedPlantDef（土豆或水稻，取决于遍历顺序）
-→ 某个区域整片种错 ✘
+```csharp
+public override IEnumerable<IntVec3> PotentialWorkCellsGlobal(Pawn pawn)
+{
+    ...
+    List<Zone> zonesList = pawn.Map.zoneManager.AllZones;
+    for (int j = 0; j < zonesList.Count; j++)
+    {
+        if (!(zonesList[j] is Zone_Growing growZone)) continue;
+        else if (ExtraRequirements(growZone, pawn) && ...)   // ① 在此设置 wantedPlantDef
+        {
+            for (int k = 0; k < growZone.cells.Count; k++)
+                yield return growZone.cells[k];               // ② 逐格产出（然后暂停）
+            wantedPlantDef = null;                            // ③ 该区产完才清空
+        }
+    }
+    wantedPlantDef = null;
+}
 ```
 
-## 五、为什么表现正好是反馈里那四条
+### 2.3 设置缓存的真正位置：`ExtraRequirements`
+
+```csharp
+protected override bool ExtraRequirements(IPlantToGrowSettable settable, Pawn pawn)
+{
+    ...
+    // 用"该区域第一格"的作物写入静态缓存
+    WorkGiver_Grower.wantedPlantDef = WorkGiver_Grower.CalculateWantedPlantDef(c, pawn.Map);
+    if (WorkGiver_Grower.wantedPlantDef == null) return false;
+    return true;
+}
+```
+
+### 2.4 派活：只在缓存为空时重算，且自己从不重置
+
+```csharp
+public override Job JobOnCell(Pawn pawn, IntVec3 c, bool forced = false)
+{
+    ...
+    if (WorkGiver_Grower.wantedPlantDef == null)          // ★ 只有为空才重算
+    {
+        WorkGiver_Grower.wantedPlantDef = WorkGiver_Grower.CalculateWantedPlantDef(c, map);
+        if (WorkGiver_Grower.wantedPlantDef == null) return null;
+    }
+    ...
+    Job job = JobMaker.MakeJob(JobDefOf.Sow, c);
+    job.plantDefToSow = WorkGiver_Grower.wantedPlantDef;  // ★ 任务取缓存值
+    return job;
+}
+```
+
+### 2.5 消费方：逐格处理，且区分 `IList` / 迭代器两条分支
+
+```csharp
+// RimWorld.JobGiver_Work
+IEnumerable<IntVec3> enumerable2 = scanner.PotentialWorkCellsGlobal(pawn);
+
+if (enumerable2 is IList<IntVec3> list2)
+{
+    for (int k = 0; k < list2.Count; k++) ProcessCell(list2[k]);
+}
+else
+{
+    foreach (IntVec3 item in enumerable2) ProcessCell(item);   // 原版走这里
+}
+```
+
+`ProcessCell` 内部调用 `scanner.HasJobOnCell(pawn, c)` → `JobOnCell(pawn, c)`。
+
+## 三、逐步骤对比（区域 A=水稻、区域 B=土豆，各 2 格）
+
+### 3.1 原版（惰性，正确）
+
+| # | 谁在动 | 动作 | `wantedPlantDef` | 任务作物 |
+|---|---|---|---|---|
+| 1 | 迭代器 | 进入 A，`ExtraRequirements` | 水稻 | — |
+| 2 | 迭代器 | `yield A1`（暂停） | 水稻 | — |
+| 3 | 消费方 | `JobOnCell(A1)` | 水稻（非空，不重算） | 水稻 ✔ |
+| 4 | 迭代器 | `yield A2` | 水稻 | — |
+| 5 | 消费方 | `JobOnCell(A2)` | 水稻 | 水稻 ✔ |
+| 6 | 迭代器 | A 产完 → **置 null** | null | — |
+| 7 | 迭代器 | 进入 B，`ExtraRequirements` | 土豆 | — |
+| 8 | 迭代器 | `yield B1` | 土豆 | — |
+| 9 | 消费方 | `JobOnCell(B1)` | 土豆 | 土豆 ✔ |
+| 10 | 迭代器 | `yield B2` / 消费方 `JobOnCell(B2)` | 土豆 | 土豆 ✔ |
+| 11 | 迭代器 | 结束 → 置 null | null | — |
+| 12 | 消费方 | 循环后为选中格创建正式任务 | null → **现算** | 正确 ✔ |
+
+### 3.2 我方补丁（物化，错误）
+
+```csharp
+var resultList = __result.ToList();     // ← 根因：在派活之前把迭代器跑完
+```
+
+| # | 谁在动 | 动作 | `wantedPlantDef` |
+|---|---|---|---|
+| 1-7 | 迭代器 | A/B 全部产出完毕（设值→产出→清空各发生两次） | **null** |
+| 8 | — | 返回 `List{...}`（实现 `IList`） | null |
+| 9 | 消费方 | `JobOnCell(A1)`：缓存为空 → 按 A1 算 | **水稻（被写入）** |
+| 10 | 消费方 | `JobOnCell(A2)`：缓存非空 → 直接用 | 水稻 ✔ |
+| 11 | 消费方 | `JobOnCell(B1)`：缓存非空 → 直接用 | **水稻 ✘** |
+| 12 | 消费方 | `JobOnCell(B2)`：缓存非空 → 直接用 | **水稻 ✘** |
+
+## 四、为什么表现是反馈里的四条
 
 | 反馈特征 | 解释 |
 |---|---|
-| **只在联机出现** | 单机时后置直接 `return __result`，不物化 |
-| **偶现** | `AllZones` 遍历顺序、区域数量、格子数量、扫描时机都会影响；**只有一个种植区时残留值恰好正确 → 不复现** |
-| **只能种一种** | 所有区域共用同一残留作物 |
-| **重置小人任务无效** | 每次重新扫描都重复同样过程，残留值不变 |
-| **关掉模组就正常** | 后置不执行，惰性时序恢复 |
+| 只在联机出现 | 后置有门控 `if (!MP.enabled || !MP.IsInMultiplayer) return __result;`，单机返回原样惰性序列 |
+| 偶现 | 取决于区域遍历顺序、区域数量；**只有一个种植区时首次计算恰好正确 → 不复现** |
+| "只能种一种" | 静态缓存被第一次派活锁死，后续全部复用 |
+| 重置小人任务无效 | 每次重新扫描仍先物化，重复同样的锁死过程 |
+| 关掉模组恢复 | 后置不执行，惰性时序恢复 |
 
-## 六、证据强度（区分已证明与待证明）
+## 五、修复
 
-**已证明（联机真实会话内，players=2）**
-
-- 建两个种植区：A=水稻、B=土豆（均在 `fertility>0` 地形且已 `RegisterZone`）
-- 走一次扫描 → 逐格 `JobOnCell` 比对 `job.plantDefToSow` 与所在区域作物
-- 结果：扫描 18 格、播种任务 9 个、**错配 6 个**，例如
-  `格(155,0,167) 区域期望 Plant_Potato，实际派活 Plant_Rice`
-
-**已证明（单机对照）**
-
-- `cropprobe` 的 C01–C06：单机走真实扫描路径，作物链路全部正确 → 支持"惰性正常、物化出错"
-
-**待证明（修复前会补做）**
-
-- 上面的复现实验里，小人当时**没有归属**，我们的后置其实走了早退分支；
-  错配是由实验自身调用的 `ToList()` 触发的。
-- 需要再做一次 A/B：**给小人设置归属**（后置进入物化分支）与不设归属各跑一遍，
-  比较错配数，才能把责任 100% 归到我们的补丁上。
-
-## 七、修复方案
-
-把两个候选过滤后置改为**惰性过滤**，保持交错求值：
+把两个后置从"先物化再过滤"改为**惰性过滤**（`yield return` 包装），保持"取一格→判一格→交一格"的节奏：
 
 ```csharp
 public static IEnumerable<IntVec3> PotentialWorkCellsGlobal_Postfix(
     IEnumerable<IntVec3> __result, Pawn pawn)
 {
     if (!MP.enabled || !MP.IsInMultiplayer) return __result;
+    if (__result == null) return null;
     if (pawn == null || pawn.Map == null) return __result;
 
     var comp = pawn.Map.GetComponent<MapComponent_PawnOwnership>();
@@ -110,7 +155,7 @@ public static IEnumerable<IntVec3> PotentialWorkCellsGlobal_Postfix(
     string pawnOwner = pawn.GetOwner();
     if (string.IsNullOrEmpty(pawnOwner)) return __result;
 
-    return FilterCellsLazily(__result, pawn, comp, pawnOwner);   // ← 返回惰性迭代器
+    return FilterCellsLazily(__result, pawn, comp, pawnOwner);
 }
 
 private static IEnumerable<IntVec3> FilterCellsLazily(
@@ -119,14 +164,13 @@ private static IEnumerable<IntVec3> FilterCellsLazily(
 {
     if (!_pawnCellsFilterSet.Add(pawn.thingIDNumber))
     {
-        // 递归调用：原样放行，避免死循环
-        foreach (IntVec3 c in source) yield return c;
+        foreach (IntVec3 c in source) yield return c;   // 递归时原样放行
         yield break;
     }
 
     try
     {
-        foreach (IntVec3 c in source)                            // ← 逐格拉取，保持交错
+        foreach (IntVec3 c in source)                   // ★ 逐格拉取，交错保持
         {
             bool ok;
             try { ok = IsCellAccessibleForCandidate(pawn, c, comp, pawnOwner); }
@@ -141,32 +185,45 @@ private static IEnumerable<IntVec3> FilterCellsLazily(
 }
 ```
 
-`PotentialWorkThingsGlobal_Postfix` 同理（`FilterThingsLazily`）。
+`PotentialWorkThingsGlobal_Postfix` 同样处理。
 
-### 注意点
+### 修复要点
 
-1. **绝对不能保留任何 `ToList()`**；
-2. 递归保护必须移入迭代器的 `try/finally`，否则后置返回时就被移除、失效；
-3. 迭代期间 `wantedPlantDef` 由原版设置，我们只决定"要不要这一格"，不改变顺序；
-4. 过滤谓词抛异常时按放行处理，保持容错。
+1. **删掉全部 `ToList()`** —— 这是实质修复；
+2. 返回惰性序列后不再是 `IList`，`JobGiver_Work` 自动回到原版的 `foreach` 分支；
+3. 递归保护移入迭代器 `try/finally`，覆盖整个惰性求值周期；
+4. 过滤逻辑（`IsThingAccessible` / `IsCellAccessibleForCandidate`）一行未改。
 
-## 八、验证计划
+## 六、测试结果
 
-| 检查 | 期望 |
+### 6.1 联机门禁（`run-mp-tests.ps1`，双客户端 players=2）
+
+B03 采用 A/B 同场对比：同一个小人（设归属以激活后置）、同样的两个种植区。
+
+```
+惰性消费（修复后实现）：检查 9 格，错配 0
+返回类型是 IList = False
+对照（先物化，等价于修复前）：检查 9 格，错配 6
+```
+
+- 修复后**错配 0**；
+- 同一路径下"先物化"仍产生 6 处错配 → 证明根因就是求值时机；
+- `IList=False` 证明游戏走回 `foreach` 分支。
+
+其余联机断言全部保持通过：M01/M02/M03（搬运过滤）、B01a–c（建造拦截）、B02a–b（区域拦截）。
+
+结果：`== 结果: PASS ==`，报告 `artifacts/mp-report.json`。
+
+### 6.2 单机回归
+
+| 场景 | 结果 |
 |---|---|
-| 联机 B03 作物错配 | 6 → **0** |
-| 联机 M01/M02/M03（搬运过滤） | 保持通过 |
-| 联机 B01a–c（建造拦截） | 保持通过 |
-| 联机 B02a–b（区域拦截） | 保持通过 |
-| 单机 `cropprobe` C01–C06 | 不回退 |
-| 新增：单区域用例 | 修复前后都应正确（防止过度修复） |
-| 新增：多区域 3+ 用例 | 覆盖残留值场景 |
+| `cropprobe`（作物链路） | 8/9（与修复前一致；唯一失败是已知的 C08：`WorkGiver_GrowerSow.JobOnCell` 未绑定补丁） |
+| `ownership`（归属用例 O01–O11） | **11/11 PASS** |
+| L0 门禁（编译 + 补丁审计 31/31） | PASS |
 
-## 九、风险
+## 七、遗留问题（不在本次范围）
 
-| 风险 | 说明 | 对策 |
-|---|---|---|
-| 惰性枚举被调用方物化 | 若原版某处自己 `ToList()`，交错仍会断 | 实测验证；已知扫描入口是惰性的 |
-| 迭代期间集合变化 | 原版也有同样前提 | 不改顺序，风险与原版一致 |
-| 递归保护失效 | 若 guard 放错位置 | 放进迭代器 `try/finally`，并加回归用例 |
-| 性能 | 逐格判断比批量判断多一次委托调用 | 影响可忽略（每格一次字典查询） |
+1. `WorkGiver_GrowerSow.JobOnCell` 等 13 个方法因参数名不一致未绑定补丁（C08）；
+2. 蓝图/种植区归属按创建者指派，联机共享殖民地时另一方劳动被拦截（建造/种田"不能做"），
+   与本次"种错作物"是两个不同问题，修复方向待定。
