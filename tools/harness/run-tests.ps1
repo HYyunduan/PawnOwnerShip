@@ -32,7 +32,12 @@ param(
 
     [string]$GameExe = 'F:\SteamLibrary\steamapps\common\RimWorld\RimWorldWin64.exe',
 
-    [int]$LaunchTimeoutSec = 150
+    [int]$LaunchTimeoutSec = 150,
+
+    # L2 场景驱动：quickstart（开发者模式快速开局）或 loadsave（加载指定存档）
+    [string]$Scenario = '',
+
+    [string]$SaveName = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -135,8 +140,9 @@ if ($buildOk -and $Deploy) {
     }
 }
 
-# ---------------------------------------------------------------- 4b. L1 启动冒烟
-$selfTest = $null
+# ------------------------------------- 4b. L1 启动冒烟 / L2 场景驱动
+$selfTest       = $null
+$scenarioReport = $null
 if ($buildOk -and $Launch) {
     $running = Get-Process -Name 'RimWorldWin64' -ErrorAction SilentlyContinue
     if ($running) {
@@ -147,19 +153,30 @@ if ($buildOk -and $Launch) {
     }
     else {
         $selfTestFile = Join-Path $work 'selftest.json'
+        $scenarioDir  = Join-Path $work 'scenario'
+        $scenarioFile = Join-Path $scenarioDir 'scenario-report.json'
         $gameLog      = Join-Path $work 'game.log'
 
-        $proc = Start-Process -FilePath $GameExe -PassThru -ArgumentList (
-            '-logFile "{0}" -po.selftest-report="{1}"' -f $gameLog, $selfTestFile)
+        $argLine  = '-logFile "{0}" -po.selftest-report="{1}"' -f $gameLog, $selfTestFile
+        $waitFile = $selfTestFile
+
+        if ($Scenario) {
+            New-Item -ItemType Directory -Force -Path $scenarioDir | Out-Null
+            $argLine += ' -po.selftest-scenario={0} -po.selftest-out="{1}"' -f $Scenario, $scenarioDir
+            if ($SaveName) { $argLine += ' -po.selftest-save="{0}"' -f $SaveName }
+            $waitFile = $scenarioFile
+        }
+
+        $proc = Start-Process -FilePath $GameExe -PassThru -ArgumentList $argLine
 
         $deadline = (Get-Date).AddSeconds($LaunchTimeoutSec)
         while ((Get-Date) -lt $deadline) {
-            if (Test-Path $selfTestFile) { break }
+            if (Test-Path $waitFile) { break }
             if ($proc.HasExited) { break }
             Start-Sleep -Milliseconds 500
         }
 
-        $got = Test-Path $selfTestFile
+        $got = Test-Path $waitFile
         if (-not $proc.HasExited) {
             try { Stop-Process -Id $proc.Id -Force -ErrorAction Stop } catch { }
         }
@@ -168,20 +185,49 @@ if ($buildOk -and $Launch) {
         $gameLogCopy = Join-Path $artifacts ("game-" + $stamp + ".log")
         if (Test-Path $gameLog) { Copy-Item $gameLog $gameLogCopy -Force }
 
-        if ($got) {
+        # L1：补丁校验报告（只要 Mod 加载成功就会生成）
+        if (Test-Path $selfTestFile) {
             try {
-                $selfTest = Get-Content $selfTestFile -Raw | ConvertFrom-Json
-                $healthy = [bool]$selfTest.healthy
-                Add-Step 'launch' $healthy ("patchedMethods=" + $selfTest.patchedMethods +
+                $selfTest = Get-Content $selfTestFile -Raw -Encoding UTF8 | ConvertFrom-Json
+                Add-Step 'launch-selfcheck' ([bool]$selfTest.healthy) ("patchedMethods=" + $selfTest.patchedMethods +
                     " prefix=" + $selfTest.prefixes + " postfix=" + $selfTest.postfixes +
                     " transpiler=" + $selfTest.transpilers)
             }
             catch {
-                Add-Step 'launch' $false ("自检报告解析失败: " + $_.Exception.Message)
+                Add-Step 'launch-selfcheck' $false ("自检报告解析失败: " + $_.Exception.Message)
             }
         }
         else {
-            Add-Step 'launch' $false ("超时 " + $LaunchTimeoutSec + "s 未生成自检报告（加载可能崩溃）。日志: " + (Split-Path -Leaf $gameLogCopy))
+            Add-Step 'launch-selfcheck' $false ("未生成补丁自检报告。日志: " + (Split-Path -Leaf $gameLogCopy))
+        }
+
+        # L2：场景驱动报告 + 截图
+        # 无论成功与否，先把场景目录里的所有产物（报告 / 截图 / 崩溃标记）拷出来，
+        # 否则进程一旦崩溃、临时目录又被回收，就什么证据都不剩。
+        if ($Scenario) {
+            $pngCount = 0
+            if (Test-Path $scenarioDir) {
+                Get-ChildItem $scenarioDir -File -ErrorAction SilentlyContinue | ForEach-Object {
+                    Copy-Item $_.FullName (Join-Path $artifacts ($stamp + '-' + $_.Name)) -Force
+                    if ($_.Extension -eq '.png') { $pngCount++ }
+                }
+            }
+
+            if (Test-Path $scenarioFile) {
+                try {
+                    $scenarioReport = Get-Content $scenarioFile -Raw -Encoding UTF8 | ConvertFrom-Json
+                    $sOk = [bool]$scenarioReport.ok
+                    $detail = "ownedThings=" + $scenarioReport.ownedThings + " png=" + $pngCount
+                    if (-not $sOk) { $detail += "; error=" + $scenarioReport.error }
+                    Add-Step 'scenario' $sOk $detail
+                }
+                catch {
+                    Add-Step 'scenario' $false ("场景报告解析失败: " + $_.Exception.Message)
+                }
+            }
+            else {
+                Add-Step 'scenario' $false ("未生成场景报告（png=" + $pngCount + "）。日志: " + (Split-Path -Leaf $gameLogCopy))
+            }
         }
     }
 }
@@ -191,12 +237,13 @@ $failed  = @($steps | Where-Object { -not $_.ok })
 $overall = ($failed.Count -eq 0)
 
 $report = [ordered]@{
-    stage     = $(if ($Launch) { 'L1' } else { 'L0' })
+    stage     = $(if ($Scenario) { 'L2' } elseif ($Launch) { 'L1' } else { 'L0' })
     startedAt = $stamp
     ok        = $overall
     steps     = @($steps)
     dll       = $modDll
     selfTest  = $selfTest
+    scenario  = $scenarioReport
 }
 $reportPath = Join-Path $artifacts 'gate-report.json'
 $report | ConvertTo-Json -Depth 6 | Set-Content -Path $reportPath -Encoding UTF8

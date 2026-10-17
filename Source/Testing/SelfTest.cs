@@ -32,6 +32,12 @@ namespace PawnOwnership.Testing
 
         public static void RunIfRequested(Harmony harmony)
         {
+            WritePatchReportIfRequested(harmony);
+            StartScenarioIfRequested();
+        }
+
+        private static void WritePatchReportIfRequested(Harmony harmony)
+        {
             string path;
             if (!GenCommandLine.TryGetCommandLineArg(ReportArg, out path)) return;
             if (string.IsNullOrEmpty(path)) return;
@@ -48,6 +54,26 @@ namespace PawnOwnership.Testing
             {
                 Log.Error("[PawnOwnership][SelfTest] 写报告失败: " + ex);
             }
+        }
+
+        /// <summary>
+        /// 带 -po.selftest-scenario=&lt;quickstart|loadsave&gt; 启动时，排队启动场景驱动。
+        /// 用 ExecuteWhenFinished 延后到入口场景加载完，避免在 Unity 未就绪时创建 GameObject。
+        /// </summary>
+        private static void StartScenarioIfRequested()
+        {
+            string scenario;
+            if (!GenCommandLine.TryGetCommandLineArg("po.selftest-scenario", out scenario)) return;
+            if (string.IsNullOrEmpty(scenario)) return;
+
+            string save, outDir;
+            GenCommandLine.TryGetCommandLineArg("po.selftest-save", out save);
+            GenCommandLine.TryGetCommandLineArg("po.selftest-out", out outDir);
+
+            LongEventHandler.ExecuteWhenFinished(delegate
+            {
+                TestDriver.Start(scenario, save, outDir);
+            });
         }
 
         private static string BuildReport(Harmony harmony, out bool healthy)

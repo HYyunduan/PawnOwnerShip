@@ -353,8 +353,16 @@ namespace PawnOwnership
         
         private static int lastColorRefreshFrame = -1;
 
+        /// <summary>MapComponentDraw 被调用的累计次数。仅用于自验证，不影响行为。</summary>
+        public static int DrawCalls;
+
+        /// <summary>最近一帧实际绘制的归属标记数量。仅用于自验证，不影响行为。</summary>
+        public static int MarkersDrawnLastFrame;
+
         public override void MapComponentDraw()
         {
+            DrawCalls++;
+            MarkersDrawnLastFrame = 0;
             DrawOwnershipMarkers();
         }
 
@@ -472,6 +480,7 @@ namespace PawnOwnership
         
         private void DrawMarkerAt(Vector3 pos, string owner)
         {
+            MarkersDrawnLastFrame++;
             Color color = GetPlayerColor(owner);
             pos.y = AltitudeLayer.MetaOverlays.AltitudeFor() + 0.1f;
             
