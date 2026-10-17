@@ -32,6 +32,7 @@ namespace PawnOwnership.Testing
 
         public static void RunIfRequested(Harmony harmony)
         {
+            MpTestBoot.ParseIfRequested();
             WritePatchReportIfRequested(harmony);
             StartScenarioIfRequested();
         }

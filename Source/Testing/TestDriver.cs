@@ -116,6 +116,17 @@ namespace PawnOwnership.Testing
         private const string SelfOwner = "Host";
         private const string OtherOwner = "OtherPlayer";
 
+        /// <summary>联机观察场景：两端进入同一会话后验证归属过滤。</summary>
+        private const string MpObserveScenario = "mpobserve";
+
+        private bool IsMpObserveScenario()
+        {
+            return string.Equals(scenario, MpObserveScenario, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>主机建房只尝试一次。</summary>
+        private bool hostAttempted;
+
         /// <summary>探针用的锚点：已设归属物品的格子坐标（用于投影到屏幕坐标）。</summary>
         private readonly List<IntVec3> probeAnchors = new List<IntVec3>();
 
@@ -234,16 +245,57 @@ namespace PawnOwnership.Testing
                     break;
 
                 case Phase.StartGame:
+                {
+                    bool timedOut = Time.realtimeSinceStartup - beginGameAt > MapTimeoutSeconds;
+
+                    // 联机客户端不读本地存档，等待主机把存档推送过来。
+                    if (MpTestBoot.IsClient)
+                    {
+                        if (MpTestBoot.IsSessionActive() && Current.ProgramState == ProgramState.Playing && Find.CurrentMap != null)
+                        {
+                            notes.Add("客户端已加入会话：" + MpTestBoot.DescribeSession());
+                            Enter(Phase.Prepare);
+                        }
+                        else if (timedOut)
+                        {
+                            Fail("客户端等待联机超时（" + MapTimeoutSeconds + " 秒）。"
+                                 + "连接错误=" + (MpTestBoot.LastError ?? "无"));
+                        }
+                        break;
+                    }
+
                     if (Current.ProgramState == ProgramState.Playing && Find.CurrentMap != null)
                     {
+                        // 联机主机：地图就绪后把当前单机局转为联机主机，然后等待会话建立。
+                        if (MpTestBoot.IsHost && !hostAttempted)
+                        {
+                            hostAttempted = true;
+                            bool hosted = MpTestBoot.TryHost();
+                            notes.Add("建房调用=" + (hosted ? "成功" : "失败")
+                                      + (MpTestBoot.LastError == null ? string.Empty : "，错误=" + MpTestBoot.LastError));
+                            if (!hosted) { Fail("建房失败: " + MpTestBoot.LastError); }
+                            break;
+                        }
+
+                        if (MpTestBoot.IsHost && !MpTestBoot.IsSessionActive())
+                        {
+                            if (timedOut) Fail("建房后等待联机会话超时（" + MapTimeoutSeconds + " 秒）");
+                            break;
+                        }
+
+                        if (MpTestBoot.IsHost)
+                        {
+                            notes.Add("主机会话已建立：" + MpTestBoot.DescribeSession());
+                        }
                         Enter(Phase.Prepare);
                     }
-                    else if (Time.realtimeSinceStartup - beginGameAt > MapTimeoutSeconds)
+                    else if (timedOut)
                     {
                         Fail("等待地图超时（" + MapTimeoutSeconds + " 秒），scenario=" + scenario
                              + "。可能卡在对话框或被 mod 不匹配阻断。");
                     }
                     break;
+                }
 
                 case Phase.Prepare:
                     if (frame - phaseFrame < 30) return;
@@ -282,6 +334,15 @@ namespace PawnOwnership.Testing
                         {
                             probeStarted = true;
                             StartCoroutine(RunSowObserve());
+                        }
+                        return;
+                    }
+                    if (IsMpObserveScenario())
+                    {
+                        if (!probeStarted)
+                        {
+                            probeStarted = true;
+                            RunMpObserve();
                         }
                         return;
                     }
@@ -342,9 +403,27 @@ namespace PawnOwnership.Testing
         {
             beginGameAt = Time.realtimeSinceStartup;
 
+            // 联机客户端：不读本地存档，直接连接主机（存档由主机推送）。
+            if (MpTestBoot.IsClient)
+            {
+                MpTestBoot.TrySetUsername("MPClient");
+                notes.Add("联机客户端：连接 " + MpTestBoot.ClientAddress);
+                bool connected = MpTestBoot.TryConnect();
+                notes.Add("连接调用=" + (connected ? "成功" : "失败")
+                          + (MpTestBoot.LastError == null ? string.Empty : "，错误=" + MpTestBoot.LastError));
+                if (!connected) Fail("连接失败: " + MpTestBoot.LastError);
+                return;
+            }
+
+            if (MpTestBoot.IsHost)
+            {
+                MpTestBoot.TrySetUsername("MPHost");
+                notes.Add("联机主机：读档后转为主机");
+            }
+
             // ownership 场景必须在真实地图上跑用例，因此和 loadsave 一样需要存档。
             // 不能走 quickstart：QuickStarter.CheckQuickStart() 经实测无任何效果（见 docs/DECISIONS.md F3）。
-            if (scenario == "loadsave" || scenario == "ownership" || IsMarkerProbeScenario() || IsCropProbeScenario() || IsSowObserveScenario())
+            if (scenario == "loadsave" || scenario == "ownership" || IsMarkerProbeScenario() || IsCropProbeScenario() || IsSowObserveScenario() || IsMpObserveScenario())
             {
                 if (string.IsNullOrEmpty(saveName))
                 {
@@ -932,6 +1011,20 @@ namespace PawnOwnership.Testing
             return n;
         }
 
+        /// <summary>
+        /// 联机观察（S1 阶段）：两端进入同一会话后，先记录会话与地图信息。
+        /// 归属过滤断言将在 S3 加入。
+        /// </summary>
+        private void RunMpObserve()
+        {
+            notes.Add("联机模式=" + MpTestBoot.Mode
+                      + "，地址=" + (MpTestBoot.IsClient ? MpTestBoot.ClientAddress : "(主机)"));
+            notes.Add("会话状态=" + MpTestBoot.DescribeSession());
+            notes.Add("地图=" + DescribeCurrentMap());
+            notes.Add("S1 里程碑：两端已进入同一联机会话");
+            Finish(true, null);
+        }
+
         private void Finish(bool ok, string error)
         {
             if (finished) return;
@@ -947,7 +1040,7 @@ namespace PawnOwnership.Testing
 
             // 标记场景专用断言：绘制数 + 三张截图。ownership 场景不出图，绝不套用这些判定，
             // 否则永远不会通过（ownedCount/markersOnDrawn 均为 0、png 不存在）。
-            if (ok && !IsOwnershipScenario() && !IsMarkerProbeScenario() && !IsCropProbeScenario() && !IsSowObserveScenario())
+            if (ok && !IsOwnershipScenario() && !IsMarkerProbeScenario() && !IsCropProbeScenario() && !IsSowObserveScenario() && !IsMpObserveScenario())
             {
                 var failures = new List<string>();
                 if (ownedCount <= 0) failures.Add("ownedCount=" + ownedCount + " (预期>0)");
