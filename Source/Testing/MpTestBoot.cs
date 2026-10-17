@@ -168,6 +168,27 @@ namespace PawnOwnership.Testing
             }
         }
 
+        /// <summary>读取当前生效的 MP 用户名（用于确认设置是否被 Steam 人格名覆盖）。</summary>
+        public static string CurrentUsername()
+        {
+            try
+            {
+                Assembly asm = MpAssembly();
+                if (asm == null) return "<无程序集>";
+
+                object settings = GetMpSettings(asm);
+                if (settings == null) return "<无设置对象>";
+
+                FieldInfo f = settings.GetType().GetField("username", AnyInstance);
+                object v = f?.GetValue(settings);
+                return v == null ? "null" : v.ToString();
+            }
+            catch (Exception ex)
+            {
+                return "<读取失败: " + ex.Message + ">";
+            }
+        }
+
         /// <summary>主机：把当前单机局转为联机主机。必须在地图内调用。</summary>
         public static bool TryHost()
         {
@@ -176,6 +197,10 @@ namespace PawnOwnership.Testing
             {
                 Assembly asm = MpAssembly();
                 if (asm == null) return false;
+
+                // 最后一刻设置用户名：MP 会在启动过程中用 Steam 人格名覆盖 early 设置。
+                TrySetUsername("MPHost");
+                Log.Message("[PawnOwnership][MpTest] 建房前用户名=" + CurrentUsername());
 
                 object settings = GetMpSettings(asm);
                 object serverSettings = null;
@@ -263,6 +288,10 @@ namespace PawnOwnership.Testing
             {
                 Assembly asm = MpAssembly();
                 if (asm == null) return false;
+
+                // 最后一刻设置用户名，避免被 Steam 人格名覆盖导致与主机重名。
+                TrySetUsername("MPClient");
+                Log.Message("[PawnOwnership][MpTest] 连接前用户名=" + CurrentUsername());
 
                 Type sb = asm.GetType("Multiplayer.Client.ServerBrowser");
                 if (sb == null) { LastError = "找不到 Multiplayer.Client.ServerBrowser"; return false; }
