@@ -176,7 +176,7 @@ namespace PawnOwnership.Testing
             }
         }
 
-        private static Pawn FindColonist(Map map)
+        public static Pawn FindColonist(Map map)
         {
             return map.mapPawns.FreeColonists.FirstOrDefault(p =>
                 p != null && !p.Downed && !p.Dead && p.workSettings != null && p.jobs != null);
@@ -186,7 +186,7 @@ namespace PawnOwnership.Testing
         /// 在殖民者附近找一片无屋顶、未迷雾、无建筑的空地，建一个 Zone_Growing。
         /// 返回第一个「能真正派活」的格子（说明地形可种植）。
         /// </summary>
-        private static Zone_Growing BuildGrowingZone(Map map, Pawn pawn, out string detail, out IntVec3 testCell)
+        public static Zone_Growing BuildGrowingZone(Map map, Pawn pawn, out string detail, out IntVec3 testCell)
         {
             detail = "";
             testCell = IntVec3.Invalid;

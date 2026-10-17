@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Text;
 using UnityEngine;
 using Verse;
+using Verse.AI;
 using RimWorld;
 
 namespace PawnOwnership.Testing
@@ -102,6 +103,18 @@ namespace PawnOwnership.Testing
         {
             return string.Equals(scenario, CropProbeScenario, StringComparison.OrdinalIgnoreCase);
         }
+
+        /// <summary>现象观察场景：把种植区归属设为他人，观察本阵营小人是否仍去干活。</summary>
+        private const string SowObserveScenario = "sowobserve";
+
+        private bool IsSowObserveScenario()
+        {
+            return string.Equals(scenario, SowObserveScenario, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>观察场景里的"本阵营"与"他人阵营"名字。</summary>
+        private const string SelfOwner = "Host";
+        private const string OtherOwner = "OtherPlayer";
 
         /// <summary>探针用的锚点：已设归属物品的格子坐标（用于投影到屏幕坐标）。</summary>
         private readonly List<IntVec3> probeAnchors = new List<IntVec3>();
@@ -263,6 +276,15 @@ namespace PawnOwnership.Testing
                         }
                         return;
                     }
+                    if (IsSowObserveScenario())
+                    {
+                        if (!probeStarted)
+                        {
+                            probeStarted = true;
+                            StartCoroutine(RunSowObserve());
+                        }
+                        return;
+                    }
                     PrepareScene();
                     Enter(Phase.CaptureOn);
                     break;
@@ -322,7 +344,7 @@ namespace PawnOwnership.Testing
 
             // ownership 场景必须在真实地图上跑用例，因此和 loadsave 一样需要存档。
             // 不能走 quickstart：QuickStarter.CheckQuickStart() 经实测无任何效果（见 docs/DECISIONS.md F3）。
-            if (scenario == "loadsave" || scenario == "ownership" || IsMarkerProbeScenario() || IsCropProbeScenario())
+            if (scenario == "loadsave" || scenario == "ownership" || IsMarkerProbeScenario() || IsCropProbeScenario() || IsSowObserveScenario())
             {
                 if (string.IsNullOrEmpty(saveName))
                 {
@@ -749,6 +771,152 @@ namespace PawnOwnership.Testing
             }
         }
 
+        /// <summary>
+        /// 现象观察：把水稻种植区归属设为「他人」，小人归属设为「本阵营」，
+        /// 然后让小人自然取活，看它是否仍会去种别人区域的作物。
+        /// 输出：是否取活、任务详情、最终区域内水稻数量、前后截图。
+        /// </summary>
+        private IEnumerator RunSowObserve()
+        {
+            Map map = Find.CurrentMap;
+            Pawn pawn = CropCases.FindColonist(map);
+            if (pawn == null)
+            {
+                Finish(false, "没有可用殖民者");
+                yield break;
+            }
+
+            string detail;
+            IntVec3 cell;
+            Zone_Growing zone = CropCases.BuildGrowingZone(map, pawn, out detail, out cell);
+            if (zone == null)
+            {
+                Finish(false, "无法建立测试种植区: " + detail);
+                yield break;
+            }
+
+            ThingDef rice = DefDatabase<ThingDef>.GetNamed("Plant_Rice", false);
+            if (rice == null)
+            {
+                Finish(false, "缺少 Plant_Rice");
+                yield break;
+            }
+            zone.SetPlantDefToGrow(rice);
+
+            var comp = map.GetComponent<MapComponent_PawnOwnership>();
+
+            // 对照开关：-po.selftest-observe-self 时区域归属设成小人自己（对照组），
+            // 否则设成「他人」（实验组）。用于对比同一流程下小人是否去播种。
+            bool sameOwner = GenCommandLine.CommandLineArgPassed("po.selftest-observe-self");
+            string zoneOwner = sameOwner ? SelfOwner : OtherOwner;
+            comp.SetOwnerZone(zone.ID, zoneOwner);
+            pawn.SetOwner(SelfOwner);
+
+            // 确保小人愿意干农活
+            try { pawn.workSettings.SetPriority(WorkTypeDefOf.Growing, 1); } catch { }
+
+            Find.Selector.Select(pawn, false, false);
+            Find.CameraDriver.SetRootPosAndSize(new Vector3(cell.x + 0.5f, 0f, cell.z + 0.5f), 16f);
+
+            notes.Add("测试区：" + detail + "，作物=" + rice.defName);
+            notes.Add("归属设定：区域=" + zoneOwner + "（" + (sameOwner ? "对照组：同归属" : "实验组：他人归属") + "），小人(" + pawn.LabelShort + ")=" + SelfOwner);
+
+            for (int i = 0; i < 20; i++) yield return null;
+            Capture("01-before.png");
+
+            TimeSpeed prevSpeed = Find.TickManager.CurTimeSpeed;
+            Find.TickManager.CurTimeSpeed = TimeSpeed.Ultrafast;
+
+            // ---- 确定性诊断：走正常扫描路径，看该区域是否会被交给小人 ----
+            WorkGiverDef giverDef = DefDatabase<WorkGiverDef>.GetNamed("GrowerSow", false);
+            var giver = giverDef == null ? null : giverDef.Worker as WorkGiver_GrowerSow;
+
+            int scanCount = 0;
+            bool scanContains = false;
+            Job scannedJob = null;
+
+            if (giver != null)
+            {
+                try
+                {
+                    var cells = giver.PotentialWorkCellsGlobal(pawn);
+                    if (cells != null)
+                    {
+                        foreach (IntVec3 c in cells)
+                        {
+                            scanCount++;
+                            if (c == cell) scanContains = true;
+                        }
+                    }
+                }
+                catch (Exception ex) { notes.Add("扫描异常: " + ex.GetType().Name + ": " + ex.Message); }
+
+                try { scannedJob = giver.JobOnCell(pawn, cell, false); }
+                catch (Exception ex) { notes.Add("派活异常: " + ex.GetType().Name + ": " + ex.Message); }
+            }
+
+            notes.Add("正常扫描格子数=" + scanCount + "，其中包含测试格=" + scanContains);
+            notes.Add("JobOnCell 结果=" + (scannedJob == null
+                ? "null（被过滤/不可派活）"
+                : scannedJob.def.defName + "，作物=" + (scannedJob.plantDefToSow == null ? "null" : scannedJob.plantDefToSow.defName)));
+            notes.Add("农活优先级(Growing)=" + (pawn.workSettings == null ? "null" : pawn.workSettings.GetPriority(WorkTypeDefOf.Growing).ToString()));
+
+            // 有任务就强制派给小人在该区域种，观察最终是否真的种下
+            if (scannedJob != null)
+            {
+                try
+                {
+                    pawn.jobs.TryTakeOrderedJob(scannedJob, JobTag.Misc);
+                    notes.Add("已强制派发播种任务给 " + pawn.LabelShort);
+                }
+                catch (Exception ex) { notes.Add("强制派活异常: " + ex.GetType().Name + ": " + ex.Message); }
+            }
+
+            float deadline = Time.realtimeSinceStartup + 90f;
+            int frames = 0;
+            while (Time.realtimeSinceStartup < deadline)
+            {
+                frames++;
+                if (CountRicePlants(map, zone, rice) > 0) break;
+                yield return null;
+            }
+
+            int ricePlants = CountRicePlants(map, zone, rice);
+            try { Find.TickManager.CurTimeSpeed = prevSpeed == TimeSpeed.Paused ? TimeSpeed.Normal : prevSpeed; } catch { }
+
+            for (int i = 0; i < 30; i++) yield return null;
+            Capture("02-after.png");
+
+            notes.Add("观察帧数=" + frames + "，区域内已种下的水稻数量=" + ricePlants);
+            notes.Add("结论：区域归属=" + zoneOwner + " 时，扫描" + (scanContains ? "包含" : "不包含") + "该区域格子，"
+                      + (scannedJob != null ? "能派活" : "不能派活") + "，实际种下水稻=" + ricePlants);
+
+            bool pass = ricePlants > 0;
+            Finish(pass, pass ? null : "强制派活后仍没有种下水稻，需检查可达性/地形/优先级");
+        }
+
+        private static bool CellInZone(Zone_Growing zone, IntVec3 c)
+        {
+            foreach (IntVec3 x in zone.Cells)
+            {
+                if (x == c) return true;
+            }
+            return false;
+        }
+
+        private static int CountRicePlants(Map map, Zone_Growing zone, ThingDef rice)
+        {
+            int n = 0;
+            foreach (IntVec3 c in zone.Cells)
+            {
+                foreach (Thing t in map.thingGrid.ThingsListAt(c))
+                {
+                    if (t is Plant p && p.def == rice) n++;
+                }
+            }
+            return n;
+        }
+
         private void Finish(bool ok, string error)
         {
             if (finished) return;
@@ -764,7 +932,7 @@ namespace PawnOwnership.Testing
 
             // 标记场景专用断言：绘制数 + 三张截图。ownership 场景不出图，绝不套用这些判定，
             // 否则永远不会通过（ownedCount/markersOnDrawn 均为 0、png 不存在）。
-            if (ok && !IsOwnershipScenario() && !IsMarkerProbeScenario() && !IsCropProbeScenario())
+            if (ok && !IsOwnershipScenario() && !IsMarkerProbeScenario() && !IsCropProbeScenario() && !IsSowObserveScenario())
             {
                 var failures = new List<string>();
                 if (ownedCount <= 0) failures.Add("ownedCount=" + ownedCount + " (预期>0)");
