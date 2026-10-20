@@ -2,12 +2,14 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Text;
 using UnityEngine;
 using Verse;
 using Verse.AI;
 using RimWorld;
+using PawnOwnership.Patches;
 
 namespace PawnOwnership.Testing
 {
@@ -115,6 +117,17 @@ namespace PawnOwnership.Testing
         /// <summary>观察场景里的"本阵营"与"他人阵营"名字。</summary>
         private const string SelfOwner = "Host";
         private const string OtherOwner = "OtherPlayer";
+
+        /// <summary>联机观察场景：两端进入同一会话后验证归属过滤。</summary>
+        private const string MpObserveScenario = "mpobserve";
+
+        private bool IsMpObserveScenario()
+        {
+            return string.Equals(scenario, MpObserveScenario, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>主机建房只尝试一次。</summary>
+        private bool hostAttempted;
 
         /// <summary>探针用的锚点：已设归属物品的格子坐标（用于投影到屏幕坐标）。</summary>
         private readonly List<IntVec3> probeAnchors = new List<IntVec3>();
@@ -234,16 +247,57 @@ namespace PawnOwnership.Testing
                     break;
 
                 case Phase.StartGame:
+                {
+                    bool timedOut = Time.realtimeSinceStartup - beginGameAt > MapTimeoutSeconds;
+
+                    // 联机客户端不读本地存档，等待主机把存档推送过来。
+                    if (MpTestBoot.IsClient)
+                    {
+                        if (MpTestBoot.IsSessionActive() && Current.ProgramState == ProgramState.Playing && Find.CurrentMap != null)
+                        {
+                            notes.Add("客户端已加入会话：" + MpTestBoot.DescribeSession());
+                            Enter(Phase.Prepare);
+                        }
+                        else if (timedOut)
+                        {
+                            Fail("客户端等待联机超时（" + MapTimeoutSeconds + " 秒）。"
+                                 + "连接错误=" + (MpTestBoot.LastError ?? "无"));
+                        }
+                        break;
+                    }
+
                     if (Current.ProgramState == ProgramState.Playing && Find.CurrentMap != null)
                     {
+                        // 联机主机：地图就绪后把当前单机局转为联机主机，然后等待会话建立。
+                        if (MpTestBoot.IsHost && !hostAttempted)
+                        {
+                            hostAttempted = true;
+                            bool hosted = MpTestBoot.TryHost();
+                            notes.Add("建房调用=" + (hosted ? "成功" : "失败")
+                                      + (MpTestBoot.LastError == null ? string.Empty : "，错误=" + MpTestBoot.LastError));
+                            if (!hosted) { Fail("建房失败: " + MpTestBoot.LastError); }
+                            break;
+                        }
+
+                        if (MpTestBoot.IsHost && !MpTestBoot.IsSessionActive())
+                        {
+                            if (timedOut) Fail("建房后等待联机会话超时（" + MapTimeoutSeconds + " 秒）");
+                            break;
+                        }
+
+                        if (MpTestBoot.IsHost)
+                        {
+                            notes.Add("主机会话已建立：" + MpTestBoot.DescribeSession());
+                        }
                         Enter(Phase.Prepare);
                     }
-                    else if (Time.realtimeSinceStartup - beginGameAt > MapTimeoutSeconds)
+                    else if (timedOut)
                     {
                         Fail("等待地图超时（" + MapTimeoutSeconds + " 秒），scenario=" + scenario
                              + "。可能卡在对话框或被 mod 不匹配阻断。");
                     }
                     break;
+                }
 
                 case Phase.Prepare:
                     if (frame - phaseFrame < 30) return;
@@ -282,6 +336,15 @@ namespace PawnOwnership.Testing
                         {
                             probeStarted = true;
                             StartCoroutine(RunSowObserve());
+                        }
+                        return;
+                    }
+                    if (IsMpObserveScenario())
+                    {
+                        if (!probeStarted)
+                        {
+                            probeStarted = true;
+                            RunMpObserve();
                         }
                         return;
                     }
@@ -342,9 +405,27 @@ namespace PawnOwnership.Testing
         {
             beginGameAt = Time.realtimeSinceStartup;
 
+            // 联机客户端：不读本地存档，直接连接主机（存档由主机推送）。
+            if (MpTestBoot.IsClient)
+            {
+                MpTestBoot.TrySetUsername("MPClient");
+                notes.Add("联机客户端：连接 " + MpTestBoot.ClientAddress);
+                bool connected = MpTestBoot.TryConnect();
+                notes.Add("连接调用=" + (connected ? "成功" : "失败")
+                          + (MpTestBoot.LastError == null ? string.Empty : "，错误=" + MpTestBoot.LastError));
+                if (!connected) Fail("连接失败: " + MpTestBoot.LastError);
+                return;
+            }
+
+            if (MpTestBoot.IsHost)
+            {
+                MpTestBoot.TrySetUsername("MPHost");
+                notes.Add("联机主机：读档后转为主机");
+            }
+
             // ownership 场景必须在真实地图上跑用例，因此和 loadsave 一样需要存档。
             // 不能走 quickstart：QuickStarter.CheckQuickStart() 经实测无任何效果（见 docs/DECISIONS.md F3）。
-            if (scenario == "loadsave" || scenario == "ownership" || IsMarkerProbeScenario() || IsCropProbeScenario() || IsSowObserveScenario())
+            if (scenario == "loadsave" || scenario == "ownership" || IsMarkerProbeScenario() || IsCropProbeScenario() || IsSowObserveScenario() || IsMpObserveScenario())
             {
                 if (string.IsNullOrEmpty(saveName))
                 {
@@ -932,6 +1013,399 @@ namespace PawnOwnership.Testing
             return n;
         }
 
+        /// <summary>
+        /// 联机观察（S3）：验证归属过滤在真实联机下是否生效。
+        ///
+        /// 主机：保持会话直到客户端完成（等待 players>=2，再维持一段时间）。
+        /// 客户端：以 <see cref="HaulAIUtility.PawnCanAutomaticallyHaul"/> 作为过滤入口做 A/B 对照：
+        ///   归属不同 → 期望被拦截（false）；归属相同 → 期望放行（true）。
+        /// </summary>
+        private void RunMpObserve()
+        {
+            if (MpTestBoot.IsHost)
+            {
+                StartCoroutine(RunMpObserveHost());
+                return;
+            }
+
+            RunMpObserveClient();
+        }
+
+        private IEnumerator RunMpObserveHost()
+        {
+            notes.Add("联机模式=host，会话=" + MpTestBoot.DescribeSession());
+
+            float deadline = Time.realtimeSinceStartup + 180f;
+            int joined = -1;
+            while (Time.realtimeSinceStartup < deadline)
+            {
+                int n = MpTestBoot.PlayerCount();
+                if (n > joined) joined = n;
+                if (n >= 2) break;
+                yield return null;
+            }
+
+            notes.Add("观察到玩家数=" + joined + "（会话=" + MpTestBoot.DescribeSession() + "）");
+
+            // 主机需要存活到客户端完成断言：再维持 120 秒。
+            float keepAliveUntil = Time.realtimeSinceStartup + 120f;
+            while (Time.realtimeSinceStartup < keepAliveUntil)
+            {
+                yield return null;
+            }
+
+            notes.Add("客户端断言窗口结束，主机收尾");
+            Finish(joined >= 2, joined >= 2 ? null : "未观察到第二个玩家加入");
+        }
+
+        private void RunMpObserveClient()
+        {
+            Map map = Find.CurrentMap;
+            Pawn pawn = CropCases.FindColonist(map);
+            var comp = map.GetComponent<MapComponent_PawnOwnership>();
+            if (pawn == null || comp == null) { Finish(false, "缺少殖民者或归属组件"); return; }
+
+            var items = new List<Thing>();
+            foreach (Thing t in map.listerThings.ThingsInGroup(ThingRequestGroup.HaulableEver))
+            {
+                if (t == null || t.def == null || t.def.category != ThingCategory.Item) continue;
+                if (!t.Spawned) continue;
+                items.Add(t);
+                if (items.Count >= 2) break;
+            }
+
+            if (items.Count < 2) { Finish(false, "可搬运物品不足 2 个，无法做 A/B 对照"); return; }
+
+            Thing mine = items[0];
+            Thing foreign = items[1];
+            string origPawn = pawn.GetOwner();
+            string origMine = comp.GetOwner(mine);
+            string origForeign = comp.GetOwner(foreign);
+
+            bool sameAllowed = false;
+            bool foreignBlocked = false;
+            bool candidateFilterOk = false;
+            string filterDetail = "";
+
+            try
+            {
+                pawn.SetOwner(SelfOwner);
+                comp.SetOwner(mine, SelfOwner);
+                comp.SetOwner(foreign, OtherOwner);
+
+                // 核心谓词：同归属应放行、异归属应拦截（该方法本身不区分单机/联机）
+                sameAllowed = InvokeCheckThingOwnership(pawn, mine);
+                foreignBlocked = !InvokeCheckThingOwnership(pawn, foreign);
+
+                // MP 门控的候选列表过滤：联机下应剔除他人归属的物品
+                var input = new List<Thing> { mine, foreign };
+                List<Thing> filtered = PatchHelpers
+                    .PotentialWorkThingsGlobal_Postfix(input, pawn)
+                    .ToList();
+
+                bool hasMine = filtered.Contains(mine);
+                bool hasForeign = filtered.Contains(foreign);
+                candidateFilterOk = hasMine && !hasForeign;
+                filterDetail = "输入 2 个，过滤后 " + filtered.Count
+                               + " 个（含自己的=" + hasMine + "，含他人的=" + hasForeign + "）";
+            }
+            finally
+            {
+                try { pawn.SetOwner(origPawn); } catch { }
+                try { comp.SetOwner(mine, origMine); } catch { }
+                try { comp.SetOwner(foreign, origForeign); } catch { }
+            }
+
+            notes.Add("会话=" + MpTestBoot.DescribeSession() + "，玩家数=" + MpTestBoot.PlayerCount());
+            notes.Add("测试物品：自己的=" + mine.LabelShort + "(" + mine.ThingID + ")"
+                      + "，他人的=" + foreign.LabelShort + "(" + foreign.ThingID + ")");
+            notes.Add("M01 同归属放行（CheckThingOwnership=true）=" + sameAllowed);
+            notes.Add("M02 异归属拦截（CheckThingOwnership=false）=" + foreignBlocked);
+            notes.Add("M03 候选列表过滤（MP 门控）=" + candidateFilterOk + "；" + filterDetail);
+
+            // ---- B01 建造拦截：蓝图归属他人时，非强制工作应被拦截，强制命令应放行 ----
+            string blueprintDetail;
+            Thing blueprint = TryCreateBlueprint(map, pawn, out blueprintDetail);
+            bool buildBlockedUnforced = false;
+            bool buildAllowedForced = false;
+            bool buildAllowedSameOwner = false;
+            if (blueprint != null)
+            {
+                string origBp = comp.GetOwner(blueprint);
+                try
+                {
+                    pawn.SetOwner(SelfOwner);
+                    comp.SetOwner(blueprint, OtherOwner);
+
+                    var scanner = DefDatabase<WorkGiverDef>.GetNamed("ConstructDeliverResourcesToBlueprints", false)?.Worker as WorkGiver_Scanner;
+                    Job dummy = null;
+                    buildBlockedUnforced = !PatchHelpers.JobOnThing_Prefix(scanner, pawn, blueprint, false, ref dummy);
+                    buildAllowedForced = PatchHelpers.JobOnThing_Prefix(scanner, pawn, blueprint, true, ref dummy);
+
+                    comp.SetOwner(blueprint, SelfOwner);
+                    Job dummy2 = null;
+                    buildAllowedSameOwner = PatchHelpers.JobOnThing_Prefix(scanner, pawn, blueprint, false, ref dummy2);
+                }
+                finally
+                {
+                    try { comp.SetOwner(blueprint, origBp); } catch { }
+                    try { blueprint.Destroy(DestroyMode.Vanish); } catch { }
+                }
+            }
+            notes.Add("B01 蓝图测试：" + blueprintDetail);
+            notes.Add("B01a 异归属 + 非强制 → 拦截（期望 True）=" + buildBlockedUnforced);
+            notes.Add("B01b 异归属 + 强制命令 → 放行（期望 True）=" + buildAllowedForced);
+            notes.Add("B01c 同归属 + 非强制 → 放行（期望 True）=" + buildAllowedSameOwner);
+
+            // ---- B02 区域拦截：种植区归属他人时，该区域格子应被拦截 ----
+            string zoneDetail;
+            IntVec3 zoneCell;
+            Zone_Growing zone = CropCases.BuildGrowingZone(map, pawn, out zoneDetail, out zoneCell);
+            bool zoneBlocked = false;
+            bool zoneAllowed = false;
+            if (zone != null)
+            {
+                try
+                {
+                    pawn.SetOwner(SelfOwner);
+                    comp.SetOwnerZone(zone.ID, OtherOwner);
+                    zoneBlocked = !InvokeCheckCellOwnership(pawn, zoneCell);
+
+                    comp.SetOwnerZone(zone.ID, SelfOwner);
+                    zoneAllowed = InvokeCheckCellOwnership(pawn, zoneCell);
+                }
+                finally
+                {
+                    try { comp.RemoveOwnerZone(zone.ID); } catch { }
+                    try { zone.Delete(); } catch { }
+                }
+            }
+            notes.Add("B02 种植区测试：" + zoneDetail);
+            notes.Add("B02a 区域归属他人 → 该格被拦截（期望 True）=" + zoneBlocked);
+            notes.Add("B02b 区域归属自己 → 该格放行（期望 True）=" + zoneAllowed);
+
+            // ---- B03 作物错配检测（真实 bug：选水稻却种土豆）----
+            // 假设：MP 下我们的 PotentialWorkCellsGlobal 后置把惰性枚举物化，
+            // 导致 WorkGiver_GrowerSow 的 wantedPlantDef 缓存停留在最后一次计算的结果，
+            // 于是逐格派活时用错作物。
+            string cropDetail = "未执行";
+            int cropChecked = 0;
+            int cropMismatch = 0;
+            int cropNullOrOther = 0;
+            int cropNullCrop = 0;
+            ThingDef rice = DefDatabase<ThingDef>.GetNamed("Plant_Rice", false);
+            ThingDef potato = DefDatabase<ThingDef>.GetNamed("Plant_Potato", false);
+            var cropGiver = DefDatabase<WorkGiverDef>.GetNamed("GrowerSow", false)?.Worker as WorkGiver_GrowerSow;
+
+            if (rice != null && potato != null && cropGiver != null)
+            {
+                Zone_Growing zoneB = null;
+                Zone_Growing zoneA = null;
+                try
+                {
+                    // 区域 A：起点=小人位置（水稻）
+                    IntVec3 originA = pawn.Position;
+                    zoneA = BuildZoneNear(map, originA, rice, out IntVec3 cellA);
+                    // 区域 B：偏移一段距离（土豆），确保与 A 不相邻
+                    IntVec3 originB = new IntVec3(originA.x + 14, 0, originA.z + 14);
+                    zoneB = BuildZoneNear(map, originB, potato, out IntVec3 cellB);
+
+                    if (zoneA != null && zoneB != null)
+                    {
+                        // 必须给小人设置归属，否则我们的后置会走早退分支，测不到补丁。
+                        try { pawn.SetOwner(SelfOwner); } catch { }
+
+                        // 主测量：像 JobGiver_Work 一样**惰性**消费（逐格取、逐格派活）
+                        IEnumerable<IntVec3> seq = cropGiver.PotentialWorkCellsGlobal(pawn);
+                        bool seqIsList = seq is IList<IntVec3>;
+
+                        int lazyChecked = 0;
+                        int lazyMismatch = 0;
+                        foreach (IntVec3 c in seq)
+                        {
+                            Zone_Growing at = map.zoneManager.ZoneAt(c) as Zone_Growing;
+                            if (at == null || (at != zoneA && at != zoneB)) continue;
+
+                            ThingDef expected = at.GetPlantDefToGrow();
+                            if (expected == null) continue;
+
+                            Job j = cropGiver.JobOnCell(pawn, c, false);
+                            if (j == null || j.def != JobDefOf.Sow) continue;
+
+                            lazyChecked++;
+                            if (j.plantDefToSow != expected)
+                            {
+                                lazyMismatch++;
+                                if (lazyMismatch <= 3)
+                                {
+                                    notes.Add("  惰性消费错配：格 " + c + " 区域期望 "
+                                              + expected.defName + "，实际 "
+                                              + (j.plantDefToSow == null ? "null" : j.plantDefToSow.defName));
+                                }
+                            }
+                        }
+
+                        // 对照组：先物化再派活（等价于修复前的旧实现），用于证明根因
+                        List<IntVec3> materialized = cropGiver.PotentialWorkCellsGlobal(pawn).ToList();
+                        int eagerChecked = 0;
+                        int eagerMismatch = 0;
+                        foreach (IntVec3 c in materialized)
+                        {
+                            Zone_Growing at = map.zoneManager.ZoneAt(c) as Zone_Growing;
+                            if (at == null || (at != zoneA && at != zoneB)) continue;
+
+                            ThingDef expected = at.GetPlantDefToGrow();
+                            if (expected == null) continue;
+
+                            Job j = cropGiver.JobOnCell(pawn, c, false);
+                            if (j == null || j.def != JobDefOf.Sow) continue;
+
+                            eagerChecked++;
+                            if (j.plantDefToSow != expected) eagerMismatch++;
+                        }
+
+                        cropChecked = lazyChecked;
+                        cropMismatch = lazyMismatch;
+                        cropDetail = "惰性消费：检查 " + lazyChecked + " 格，错配 " + lazyMismatch
+                                     + "；返回类型是 IList=" + seqIsList
+                                     + "；对照（先物化）：检查 " + eagerChecked + " 格，错配 " + eagerMismatch;
+                    }
+                    else
+                    {
+                        cropDetail = "区域创建失败（A=" + (zoneA != null) + "，B=" + (zoneB != null) + "）";
+                    }
+                }
+                finally
+                {
+                    try { if (zoneB != null) zoneB.Delete(); } catch { }
+                    try { if (zoneA != null) zoneA.Delete(); } catch { }
+                }
+            }
+
+            notes.Add("B03 作物错配检测：" + cropDetail);
+            notes.Add("B03 判定：作物" + (cropMismatch == 0 ? "全部正确（未复现）" : "出现错配（复现真实 bug）"));
+
+            bool pass = sameAllowed && foreignBlocked && candidateFilterOk
+                        && (blueprint == null || (buildBlockedUnforced && buildAllowedForced && buildAllowedSameOwner))
+                        && (zone == null || (zoneBlocked && zoneAllowed))
+                        && cropMismatch == 0;
+
+            notes.Add("判定：" + (pass ? "归属过滤在联机下按预期生效（含建造/种植区路径）" : "归属过滤行为不符合预期"));
+            Finish(pass, pass ? null : "归属过滤未按预期生效，详见 M/B 系列");
+        }
+
+        /// <summary>用反射调用 GenConstruct.PlaceBlueprintForBuild（参数名映射，未用参数用 Type.Missing）。</summary>
+        private static Thing TryCreateBlueprint(Map map, Pawn pawn, out string detail)
+        {
+            detail = "";
+            try
+            {
+                BuildableDef def = DefDatabase<ThingDef>.GetNamed("SunLamp", false);
+                if (def == null) { detail = "找不到 SunLamp 定义"; return null; }
+
+                IntVec3 cell = IntVec3.Invalid;
+                foreach (IntVec3 c in CellRect.CenteredOn(pawn.Position, 8).Cells)
+                {
+                    if (!c.InBounds(map)) continue;
+                    if (c.Fogged(map) || map.roofGrid.Roofed(c)) continue;
+                    if (map.thingGrid.ThingsListAt(c).Count > 0) continue;
+                    if (!GenConstruct.CanPlaceBlueprintAt(def, c, Rot4.North, map).Accepted) continue;
+                    cell = c;
+                    break;
+                }
+
+                if (!cell.IsValid) { detail = "附近没有可放置蓝图空地"; return null; }
+
+                MethodInfo m = typeof(GenConstruct).GetMethod("PlaceBlueprintForBuild",
+                    BindingFlags.Public | BindingFlags.Static);
+                if (m == null) { detail = "找不到 GenConstruct.PlaceBlueprintForBuild"; return null; }
+
+                ParameterInfo[] ps = m.GetParameters();
+                object[] args = new object[ps.Length];
+                for (int i = 0; i < ps.Length; i++)
+                {
+                    switch (ps[i].Name)
+                    {
+                        case "sourceDef": args[i] = def; break;
+                        case "center": args[i] = cell; break;
+                        case "map": args[i] = map; break;
+                        case "rotation": args[i] = Rot4.North; break;
+                        case "faction": args[i] = Faction.OfPlayer; break;
+                        case "stuff": args[i] = null; break;
+                        default: args[i] = Type.Missing; break;
+                    }
+                }
+
+                Thing bp = m.Invoke(null, args) as Thing;
+                detail = bp == null ? "创建返回 null" : ("已在 " + cell + " 创建 " + def.defName + " 蓝图");
+                return bp;
+            }
+            catch (Exception ex)
+            {
+                Exception root = ex is TargetInvocationException tie && tie.InnerException != null ? tie.InnerException : ex;
+                detail = "创建蓝图失败: " + root.GetType().Name + ": " + root.Message;
+                return null;
+            }
+        }
+
+        /// <summary>在指定中心附近建一个种植区并设定作物，返回区域与首个格。</summary>
+        private static Zone_Growing BuildZoneNear(Map map, IntVec3 origin, ThingDef crop, out IntVec3 testCell)
+        {
+            testCell = IntVec3.Invalid;
+            try
+            {
+                var zone = new Zone_Growing(map.zoneManager);
+                // 仅 new 不注册到 AllZones，而 WorkGiver_Grower.PotentialWorkCellsGlobal 是遍历 AllZones 的，
+                // 不注册会导致扫描返回 0 格（测试会假通过）。
+                if (!map.zoneManager.AllZones.Contains(zone))
+                {
+                    map.zoneManager.RegisterZone(zone);
+                }
+
+                int added = 0;
+                foreach (IntVec3 c in CellRect.CenteredOn(origin, 5).Cells)
+                {
+                    if (!c.InBounds(map)) continue;
+                    if (c.Fogged(map) || map.roofGrid.Roofed(c)) continue;
+                    if (map.zoneManager.ZoneAt(c) != null) continue;
+                    if (map.thingGrid.ThingsListAt(c).Count > 0) continue;
+                    // 必须是可种植地形，否则扫描不会返回该格，测试会假通过
+                    if (map.terrainGrid.TerrainAt(c).fertility <= 0f) continue;
+
+                    try { zone.AddCell(c); added++; } catch { }
+                    if (added >= 9) break;
+                }
+
+                if (added == 0) { zone.Delete(); return null; }
+
+                zone.SetPlantDefToGrow(crop);
+                testCell = zone.Cells.First();
+                return zone;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>CheckCellOwnership 为私有静态方法，测试侧用反射调用。</summary>
+        private static bool InvokeCheckCellOwnership(Pawn pawn, IntVec3 cell)
+        {
+            MethodInfo m = typeof(PatchHelpers).GetMethod(
+                "CheckCellOwnership", BindingFlags.NonPublic | BindingFlags.Static);
+            if (m == null) return true;
+            return (bool)m.Invoke(null, new object[] { pawn, cell });
+        }
+
+        /// <summary>CheckThingOwnership 为私有静态方法，测试侧用反射调用。</summary>
+        private static bool InvokeCheckThingOwnership(Pawn pawn, Thing thing)
+        {
+            MethodInfo m = typeof(PatchHelpers).GetMethod(
+                "CheckThingOwnership", BindingFlags.NonPublic | BindingFlags.Static);
+            if (m == null) return true;
+            return (bool)m.Invoke(null, new object[] { pawn, thing });
+        }
+
         private void Finish(bool ok, string error)
         {
             if (finished) return;
@@ -947,7 +1421,7 @@ namespace PawnOwnership.Testing
 
             // 标记场景专用断言：绘制数 + 三张截图。ownership 场景不出图，绝不套用这些判定，
             // 否则永远不会通过（ownedCount/markersOnDrawn 均为 0、png 不存在）。
-            if (ok && !IsOwnershipScenario() && !IsMarkerProbeScenario() && !IsCropProbeScenario() && !IsSowObserveScenario())
+            if (ok && !IsOwnershipScenario() && !IsMarkerProbeScenario() && !IsCropProbeScenario() && !IsSowObserveScenario() && !IsMpObserveScenario())
             {
                 var failures = new List<string>();
                 if (ownedCount <= 0) failures.Add("ownedCount=" + ownedCount + " (预期>0)");

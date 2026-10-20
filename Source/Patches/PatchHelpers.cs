@@ -287,6 +287,12 @@ namespace PawnOwnership.Patches
         // ==========================================
         // 候选物品过滤 - PotentialWorkThingsGlobal Postfix
         // ==========================================
+        // ⚠ 必须保持**惰性**：原版 `PotentialWorkCellsGlobal` 是 yield 迭代器，
+        // 它在"产出每一格/每个物品"的同时设置/清空共享状态（如 WorkGiver_Grower.wantedPlantDef）。
+        // 消费方（JobGiver_Work）是"取一个 → 立刻派活 → 再取下一個"的交错模式。
+        // 一旦在这里 ToList() 提前求值，状态设置与清空会挤在派活之前完成，
+        // 导致后续所有候选共用第一次计算出的值（联机下表现为"选水稻却种土豆"）。
+        // 详见 docs/bug-crop-mismatch-investigation.md。
         public static IEnumerable<Thing> PotentialWorkThingsGlobal_Postfix(
             IEnumerable<Thing> __result, 
             Pawn pawn)
@@ -295,25 +301,49 @@ namespace PawnOwnership.Patches
             if (!MP.enabled || !MP.IsInMultiplayer)
                 return __result;
             
+            if (__result == null)
+                return null;
+            
             if (pawn == null || pawn.Map == null)
                 return __result;
             
-            // 防重复检查
-            if (!_pawnThingsFilterSet.Add(pawn.thingIDNumber))
+            var comp = pawn.Map.GetComponent<MapComponent_PawnOwnership>();
+            if (comp == null)
                 return __result;
+            
+            string pawnOwner = pawn.GetOwner();
+            if (string.IsNullOrEmpty(pawnOwner))
+                return __result;
+            
+            return FilterThingsLazily(__result, pawn, comp, pawnOwner);
+        }
+        
+        /// <summary>
+        /// 惰性过滤物品候选列表：逐个拉取、逐个判断，绝不提前物化。
+        /// 递归保护放在迭代器的 finally 里，覆盖整个惰性求值过程。
+        /// </summary>
+        private static IEnumerable<Thing> FilterThingsLazily(
+            IEnumerable<Thing> source,
+            Pawn pawn,
+            MapComponent_PawnOwnership comp,
+            string pawnOwner)
+        {
+            if (!_pawnThingsFilterSet.Add(pawn.thingIDNumber))
+            {
+                // 已在过滤中（子类调用 base 造成的重入）：原样放行
+                foreach (Thing t in source) yield return t;
+                yield break;
+            }
             
             try
             {
-                var comp = pawn.Map.GetComponent<MapComponent_PawnOwnership>();
-                if (comp == null)
-                    return __result;
-                
-                string pawnOwner = pawn.GetOwner();
-                if (string.IsNullOrEmpty(pawnOwner))
-                    return __result;
-                
-                var resultList = __result.ToList();
-                return resultList.Where(thing => IsThingAccessible(pawn, thing, comp, pawnOwner)).ToList();
+                foreach (Thing t in source)
+                {
+                    bool accessible;
+                    try { accessible = IsThingAccessible(pawn, t, comp, pawnOwner); }
+                    catch { accessible = true; }
+                    if (accessible) yield return t;
+                }
             }
             finally
             {
@@ -324,6 +354,8 @@ namespace PawnOwnership.Patches
         // ==========================================
         // 候选格子过滤 - PotentialWorkCellsGlobal Postfix
         // ==========================================
+        // ⚠ 同上的惰性要求：这里的候选正是 WorkGiver_GrowerSow 的播种格子，
+        // 提前物化会破坏 wantedPlantDef 的设值/清空时序，导致作物错配。
         public static IEnumerable<IntVec3> PotentialWorkCellsGlobal_Postfix(
             IEnumerable<IntVec3> __result, 
             Pawn pawn)
@@ -332,25 +364,45 @@ namespace PawnOwnership.Patches
             if (!MP.enabled || !MP.IsInMultiplayer)
                 return __result;
             
+            if (__result == null)
+                return null;
+            
             if (pawn == null || pawn.Map == null)
                 return __result;
             
-            // 防重复检查
-            if (!_pawnCellsFilterSet.Add(pawn.thingIDNumber))
+            var comp = pawn.Map.GetComponent<MapComponent_PawnOwnership>();
+            if (comp == null)
                 return __result;
+            
+            string pawnOwner = pawn.GetOwner();
+            if (string.IsNullOrEmpty(pawnOwner))
+                return __result;
+            
+            return FilterCellsLazily(__result, pawn, comp, pawnOwner);
+        }
+        
+        /// <summary>惰性过滤格子候选列表，理由同 <see cref="FilterThingsLazily"/>。</summary>
+        private static IEnumerable<IntVec3> FilterCellsLazily(
+            IEnumerable<IntVec3> source,
+            Pawn pawn,
+            MapComponent_PawnOwnership comp,
+            string pawnOwner)
+        {
+            if (!_pawnCellsFilterSet.Add(pawn.thingIDNumber))
+            {
+                foreach (IntVec3 c in source) yield return c;
+                yield break;
+            }
             
             try
             {
-                var comp = pawn.Map.GetComponent<MapComponent_PawnOwnership>();
-                if (comp == null)
-                    return __result;
-                
-                string pawnOwner = pawn.GetOwner();
-                if (string.IsNullOrEmpty(pawnOwner))
-                    return __result;
-                
-                var resultList = __result.ToList();
-                return resultList.Where(cell => IsCellAccessibleForCandidate(pawn, cell, comp, pawnOwner)).ToList();
+                foreach (IntVec3 c in source)
+                {
+                    bool accessible;
+                    try { accessible = IsCellAccessibleForCandidate(pawn, c, comp, pawnOwner); }
+                    catch { accessible = true; }
+                    if (accessible) yield return c;
+                }
             }
             finally
             {
