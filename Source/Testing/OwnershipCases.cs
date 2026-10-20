@@ -48,7 +48,7 @@ namespace PawnOwnership.Testing
         private const string OwnerA = "PO_TestAlpha";
         private const string OwnerB = "PO_TestBeta";
 
-        private const int TotalCases = 11;
+        private const int TotalCases = 13;
 
         // =====================================================================
         // 公共入口
@@ -92,6 +92,8 @@ namespace PawnOwnership.Testing
                 RunCase(results, "O09", "显示开关不影响归属数据", "ShowMarkers 关/开不改变已存归属数据", O09);
                 RunCase(results, "O10", "他人归属物不可工作", "无归属时 HasJobOnThing=true；改为他人归属后 HasJobOnThing=false", O10);
                 RunCase(results, "O11", "归属者可工作", "小人归属与目标归属一致时 HasJobOnThing=true", O11);
+                RunCase(results, "O12", "批量设置归属", "对多个物品批量设置归属后，每个物品的归属都同步更新（支持再次切换与清除）", O12);
+                RunCase(results, "O13", "多选时出现所属页签", "同时选中多个物品时，检视面板的 CurTabs 包含所属页签且 IsVisible=true", O13);
             }
             finally
             {
@@ -784,6 +786,135 @@ namespace PawnOwnership.Testing
         /// 造一个"墙 + Deconstruct 标记 + 小人归属"的真实场景。
         /// wallOwner 传 null 表示先保持墙无归属；pawnOwner 非空则写入小人归属。
         /// </summary>
+        // =====================================================================
+        // O12 批量设置归属（多选「批量更改所属」的底层逻辑）
+        // =====================================================================
+
+        private static void O12(CaseCtx c)
+        {
+            Map map;
+            MapComponent_PawnOwnership comp;
+            if (!TryGetEnv(c, out map, out comp)) return;
+
+            List<Thing> items = new List<Thing>();
+            List<string> originalOwners = new List<string>();
+
+            try
+            {
+                IntVec3 cell;
+                items.Add(SpawnTestItem(map, ThingDefOf.Steel, out cell));
+                items.Add(SpawnTestItem(map, ThingDefOf.Plasteel, out cell));
+                items.Add(SpawnTestItem(map, ThingDefOf.WoodLog, out cell));
+                items.RemoveAll(delegate(Thing t) { return t == null; });
+
+                if (items.Count < 2)
+                {
+                    c.Fail("可生成的测试物品不足（" + items.Count + " 个）");
+                    return;
+                }
+
+                for (int i = 0; i < items.Count; i++) originalOwners.Add(comp.GetOwner(items[i]));
+
+                // 1) 批量设置为 Alpha
+                int applied = OwnershipBulk.Apply(items, OwnerA);
+                c.Expect("批量设置成功数", items.Count, applied);
+                for (int i = 0; i < items.Count; i++)
+                {
+                    c.Expect("设置后 " + items[i].ThingID + " 归属", OwnerA, comp.GetOwner(items[i]));
+                }
+
+                // 2) 批量切换为 Beta（验证可重复设置）
+                OwnershipBulk.Apply(items, OwnerB);
+                for (int i = 0; i < items.Count; i++)
+                {
+                    c.Expect("切换后 " + items[i].ThingID + " 归属", OwnerB, comp.GetOwner(items[i]));
+                }
+
+                // 3) 批量清除
+                OwnershipBulk.Apply(items, null);
+                for (int i = 0; i < items.Count; i++)
+                {
+                    c.Expect("清除后 " + items[i].ThingID + " 归属", null, comp.GetOwner(items[i]));
+                }
+
+                // 4) 共同归属汇总
+                OwnershipBulk.Apply(items, OwnerA);
+                c.Expect("共同归属（全部 Alpha）", OwnerA, OwnershipBulk.GetCommonOwner(items));
+                if (items.Count >= 2)
+                {
+                    comp.SetOwner(items[0], OwnerB);
+                    c.Expect("共同归属（混合）", "多个", OwnershipBulk.GetCommonOwner(items));
+                }
+            }
+            finally
+            {
+                for (int i = 0; i < items.Count; i++)
+                {
+                    try { comp.SetOwner(items[i], originalOwners[i]); } catch { }
+                    SafeDestroy(items[i]);
+                }
+            }
+        }
+        // =====================================================================
+        // O13 多选时「所属」页签可见（批量入口的前置条件）
+        // =====================================================================
+
+        private static void O13(CaseCtx c)
+        {
+            Map map;
+            MapComponent_PawnOwnership comp;
+            if (!TryGetEnv(c, out map, out comp)) return;
+
+            Thing a = null;
+            Thing b = null;
+
+            try
+            {
+                IntVec3 cellA;
+                IntVec3 cellB;
+                a = SpawnTestItem(map, ThingDefOf.Steel, out cellA);
+                b = SpawnTestItem(map, ThingDefOf.Plasteel, out cellB);
+                if (a == null || b == null)
+                {
+                    c.Fail("无法生成两个测试物品");
+                    return;
+                }
+
+                // 多选
+                Find.Selector.ClearSelection();
+                Find.Selector.Select(a, false, false);
+                Find.Selector.Select(b, false, false);
+
+                c.Expect("选中数量", 2, Find.Selector.NumSelected);
+                c.Expect("可设置归属的对象数", 2, OwnershipBulk.SupportedCount());
+
+                MainTabWindow_Inspect pane = MainButtonDefOf.Inspect.TabWindow as MainTabWindow_Inspect;
+                if (pane == null)
+                {
+                    c.Fail("MainButtonDefOf.Inspect.TabWindow 不是 MainTabWindow_Inspect");
+                    return;
+                }
+
+                System.Collections.Generic.IEnumerable<InspectTabBase> tabs = pane.CurTabs;
+                bool hasOwnershipTab = false;
+                if (tabs != null)
+                {
+                    foreach (InspectTabBase tab in tabs)
+                    {
+                        if (tab is ITab_Ownership) { hasOwnershipTab = true; break; }
+                    }
+                }
+
+                c.ExpectBool("多选 CurTabs 含所属页签", true, hasOwnershipTab);
+                c.ExpectBool("所属页签 IsVisible", true, ITab_Ownership.GetShared().IsVisible);
+            }
+            finally
+            {
+                try { Find.Selector.ClearSelection(); } catch { }
+                SafeDestroy(a);
+                SafeDestroy(b);
+            }
+        }
         private static DeconstructWorkSetup SetupDeconstructWork(CaseCtx c, string wallOwner, string pawnOwner)
         {
             Map map;

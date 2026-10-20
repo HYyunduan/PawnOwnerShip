@@ -1,80 +1,93 @@
+using System.Collections.Generic;
 using RimWorld;
 using UnityEngine;
 using Verse;
-using Multiplayer.API;
 
 namespace PawnOwnership
 {
     public class ITab_Ownership : ITab
     {
+        private static ITab_Ownership shared;
+
+        /// <summary>
+        /// 共享实例。单件选择与多选都复用它：<see cref="ITab.StillValid"/> 用 CurTabs.Contains(this)
+        /// 做引用比较，因此必须始终返回同一个对象。
+        /// </summary>
+        public static ITab_Ownership GetShared()
+        {
+            if (shared == null) shared = new ITab_Ownership();
+            return shared;
+        }
+
         public ITab_Ownership()
         {
             this.labelKey = "所属";
-            // 高度容纳：当前所属 / 更改所属 / 显示设置 / 调试设置
-            this.size = new Vector2(300f, 262f);
+            // 高度容纳：当前所属 / 更改所属 / 显示设置 / 调试设置（多选时多一行汇总）
+            this.size = new Vector2(300f, 292f);
         }
 
         public override bool IsVisible
         {
             get
             {
-                if (SelThing == null) return false;
+                int numSelected = Find.Selector.NumSelected;
+                if (numSelected > 1)
+                {
+                    // 多选：只要选中里存在支持设置归属的对象就显示
+                    return OwnershipBulk.SupportedCount() > 0;
+                }
+                if (numSelected != 1) return false;
 
-                // 殖民者/奴隶
-                if (SelThing is Pawn pawn && (pawn.IsColonist || pawn.IsSlave))
-                    return true;
-
-                // 物品
-                if (SelThing.def.category == ThingCategory.Item)
-                    return true;
-
-                // 动物（非殖民者/奴隶的 Pawn）
-                if (SelThing is Pawn animal && !animal.IsColonist && !animal.IsSlave)
-                    return true;
-
-                return false;
+                return OwnershipBulk.IsSupported(SelThing);
             }
         }
 
         protected override void CloseTab() { }
         protected override bool StillValid => IsVisible;
 
-        private string GetOwner(Thing thing)
-        {
-            // Pawn 走世界组件
-            if (thing is Pawn pawn)
-                return pawn.GetOwner();
-
-            // Thing 走地图组件
-            return thing.Map?.GetComponent<MapComponent_PawnOwnership>()?.GetOwner(thing);
-        }
-
         protected override void FillTab()
         {
-            Thing thing = SelThing;
-            if (thing == null) return;
+            List<Thing> things = OwnershipBulk.SupportedThings(Find.Selector.SelectedObjects);
+            if (things.Count == 0) return;
 
             Rect rect = new Rect(10f, 10f, this.size.x - 20f, this.size.y - 20f);
             Listing_Standard listing = new Listing_Standard();
             listing.Begin(rect);
 
-            // 显示当前所属
-            string currentOwner = GetOwner(thing);
-            if (string.IsNullOrEmpty(currentOwner))
+            if (things.Count == 1)
             {
-                listing.Label("当前所属：无");
+                Thing thing = things[0];
+                string currentOwner = OwnershipBulk.GetOwner(thing);
+                listing.Label(string.IsNullOrEmpty(currentOwner) ? "当前所属：无" : $"当前所属：{currentOwner}");
+
+                if (listing.ButtonText("更改所属"))
+                {
+                    Find.WindowStack.Add(new Dialog_SetOwner(things));
+                }
             }
             else
             {
-                listing.Label($"当前所属：{currentOwner}");
+                // 多选：批量设置
+                listing.Label($"已选中 {things.Count} 个可设置归属的对象");
+
+                string common = OwnershipBulk.GetCommonOwner(things);
+                listing.Label(string.IsNullOrEmpty(common) ? "当前归属：无" : $"当前归属：{common}");
+
+                if (listing.ButtonText("批量更改所属"))
+                {
+                    Find.WindowStack.Add(new Dialog_SetOwner(things));
+                }
             }
 
-            if (listing.ButtonText("更改所属"))
-            {
-                Find.WindowStack.Add(new Dialog_SetOwner(thing));
-            }
+            DrawDisplaySettings(listing);
+            DrawDebugSettings(listing);
 
-            // 显示设置开关：从「模组设置页 + 地图角落按钮」迁移到本页签，与调试开关放在一起。
+            listing.End();
+        }
+
+        /// <summary>显示设置：归属颜色块开关（D-001 更新后唯一入口）。</summary>
+        private void DrawDisplaySettings(Listing_Standard listing)
+        {
             listing.Gap(10f);
             listing.Label("--- 显示设置 ---".Colorize(Color.yellow));
 
@@ -89,8 +102,11 @@ namespace PawnOwnership
                 Mod_PawnOwnership.ShowMarkers = showMarkers;
                 Mod_PawnOwnership.PersistSettings();
             }
+        }
 
-            // Debug 模式开关
+        /// <summary>调试设置：模组 Debug 跟随游戏开发者模式，或强制开/关。</summary>
+        private void DrawDebugSettings(Listing_Standard listing)
+        {
             listing.Gap(10f);
             listing.Label("--- 调试设置 ---".Colorize(Color.yellow));
 
@@ -100,15 +116,9 @@ namespace PawnOwnership
             bool currentDebugMode = MapComponent_PawnOwnership.DebugMode;
             bool isManual = MapComponent_PawnOwnership.DebugModeManual;
 
-            string buttonText;
-            if (!isManual)
-            {
-                buttonText = $"模组 Debug: 跟随游戏 ({(currentDebugMode ? "开启" : "关闭")})";
-            }
-            else
-            {
-                buttonText = $"模组 Debug: 强制 {(currentDebugMode ? "开启" : "关闭")}";
-            }
+            string buttonText = !isManual
+                ? $"模组 Debug: 跟随游戏 ({(currentDebugMode ? "开启" : "关闭")})"
+                : $"模组 Debug: 强制 {(currentDebugMode ? "开启" : "关闭")}";
 
             if (listing.ButtonText(buttonText))
             {
@@ -126,10 +136,7 @@ namespace PawnOwnership
                 }
             }
 
-            string statusText = !isManual ? "(跟随游戏开发者模式)" : "(手动设置)";
-            listing.Label(statusText.Colorize(Color.gray));
-
-            listing.End();
+            listing.Label((isManual ? "(手动设置)" : "(跟随游戏开发者模式)").Colorize(Color.gray));
         }
     }
 }

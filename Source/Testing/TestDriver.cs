@@ -1191,8 +1191,6 @@ namespace PawnOwnership.Testing
             string cropDetail = "未执行";
             int cropChecked = 0;
             int cropMismatch = 0;
-            int cropNullOrOther = 0;
-            int cropNullCrop = 0;
             ThingDef rice = DefDatabase<ThingDef>.GetNamed("Plant_Rice", false);
             ThingDef potato = DefDatabase<ThingDef>.GetNamed("Plant_Potato", false);
             var cropGiver = DefDatabase<WorkGiverDef>.GetNamed("GrowerSow", false)?.Worker as WorkGiver_GrowerSow;

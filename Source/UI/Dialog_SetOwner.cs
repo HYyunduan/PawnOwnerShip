@@ -6,16 +6,23 @@ using Multiplayer.API;
 
 namespace PawnOwnership
 {
+    /// <summary>
+    /// 更改归属对话框。支持单个对象与多选批量设置。
+    /// </summary>
     public class Dialog_SetOwner : Window
     {
-        private Thing thing;
+        private readonly List<Thing> things;
         private List<IPlayerInfo> players;
         private Vector2 scrollPosition;
         private float scrollViewHeight;
 
-        public Dialog_SetOwner(Thing thing)
+        public Dialog_SetOwner(Thing thing) : this(new List<Thing> { thing })
         {
-            this.thing = thing;
+        }
+
+        public Dialog_SetOwner(List<Thing> things)
+        {
+            this.things = things ?? new List<Thing>();
 
             // 获取在线玩家列表
             if (MP.enabled && MP.IsInMultiplayer)
@@ -36,11 +43,12 @@ namespace PawnOwnership
 
         public override Vector2 InitialSize => new Vector2(400f, 450f);
 
+        private bool IsBatch => things.Count > 1;
+
         private string GetCurrentOwner()
         {
-            if (thing is Pawn pawn)
-                return pawn.GetOwner() ?? "无";
-            return thing.Map?.GetComponent<MapComponent_PawnOwnership>()?.GetOwner(thing) ?? "无";
+            string common = OwnershipBulk.GetCommonOwner(things);
+            return string.IsNullOrEmpty(common) ? "无" : common;
         }
 
         public override void DoWindowContents(Rect inRect)
@@ -48,7 +56,15 @@ namespace PawnOwnership
             Listing_Standard listing = new Listing_Standard();
             listing.Begin(inRect);
 
-            listing.Label($"设置 <b>{thing.LabelShortCap}</b> 的归属玩家：");
+            if (IsBatch)
+            {
+                listing.Label($"批量设置 <b>{things.Count}</b> 个对象的归属玩家：");
+            }
+            else
+            {
+                string name = things.Count == 1 ? things[0].LabelShortCap : "对象";
+                listing.Label($"设置 <b>{name}</b> 的归属玩家：");
+            }
             listing.Gap(12f);
 
             string currentOwner = GetCurrentOwner();
@@ -118,16 +134,9 @@ namespace PawnOwnership
 
         private void SetOwner(string ownerName)
         {
-            if (thing is Pawn)
-            {
-                MapComponent_PawnOwnership.SyncSetPawnOwner(
-                    Find.CurrentMap.uniqueID, thing.ThingID, ownerName);
-            }
-            else
-            {
-                MapComponent_PawnOwnership.SyncSetThingOwner(
-                    Find.CurrentMap.uniqueID, thing.ThingID, ownerName);
-            }
+            int applied = OwnershipBulk.Apply(things, ownerName);
+            Log.Message("[PawnOwnership] 设置归属: " + applied + "/" + things.Count
+                        + " 个对象 -> " + (ownerName ?? "(清除)"));
             this.Close();
         }
     }

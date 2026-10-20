@@ -13,32 +13,17 @@ namespace PawnOwnership.Patches
     [HarmonyPatch("GetInspectTabs")]
     public static class Patch_Thing_GetInspectTabs
     {
-        private static ITab_Ownership _cachedTab;
-
         static void Postfix(Thing __instance, ref IEnumerable<InspectTabBase> __result)
         {
             if (__instance == null) return;
 
-            bool shouldInject = false;
-
-            // 殖民者/奴隶
-            if (__instance is Pawn pawn && (pawn.IsColonist || pawn.IsSlave))
-                shouldInject = true;
-            // 物品
-            else if (__instance.def.category == ThingCategory.Item)
-                shouldInject = true;
-            // 动物（非殖民者/奴隶的 Pawn）
-            else if (__instance is Pawn animal && !animal.IsColonist && !animal.IsSlave)
-                shouldInject = true;
-
-            if (!shouldInject) return;
-
-            if (_cachedTab == null)
-                _cachedTab = new ITab_Ownership();
+            // 是否支持设置归属（Pawn 或物品）——统一由 OwnershipBulk 判定，
+            // 保证与多选页签的可见性规则一致。
+            if (!OwnershipBulk.IsSupported(__instance)) return;
 
             var tabs = __result?.ToList() ?? new List<InspectTabBase>();
             if (!tabs.Any(t => t is ITab_Ownership))
-                tabs.Add(_cachedTab);
+                tabs.Add(ITab_Ownership.GetShared());
             __result = tabs;
         }
     }
