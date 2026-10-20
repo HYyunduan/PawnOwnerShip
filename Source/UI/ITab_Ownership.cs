@@ -10,7 +10,8 @@ namespace PawnOwnership
         public ITab_Ownership()
         {
             this.labelKey = "所属";
-            this.size = new Vector2(300f, 200f);
+            // 高度容纳：当前所属 / 更改所属 / 显示设置 / 调试设置
+            this.size = new Vector2(300f, 262f);
         }
 
         public override bool IsVisible
@@ -71,6 +72,22 @@ namespace PawnOwnership
             if (listing.ButtonText("更改所属"))
             {
                 Find.WindowStack.Add(new Dialog_SetOwner(thing));
+            }
+
+            // 显示设置开关：从「模组设置页 + 地图角落按钮」迁移到本页签，与调试开关放在一起。
+            listing.Gap(10f);
+            listing.Label("--- 显示设置 ---".Colorize(Color.yellow));
+
+            bool showMarkers = Mod_PawnOwnership.ShowMarkers;
+            listing.CheckboxLabeled(
+                "显示归属颜色块",
+                ref showMarkers,
+                "关闭后不再在蓝图 / 框架 / 物品上绘制归属颜色块。检查信息里的「所属」与本页签不受影响。");
+
+            if (showMarkers != Mod_PawnOwnership.ShowMarkers)
+            {
+                Mod_PawnOwnership.ShowMarkers = showMarkers;
+                Mod_PawnOwnership.PersistSettings();
             }
 
             // Debug 模式开关

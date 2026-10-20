@@ -366,24 +366,8 @@ namespace PawnOwnership
             DrawOwnershipMarkers();
         }
 
-        /// <summary>
-        /// 屏幕角落的快捷开关。正式入口在 Mod 设置页，两者共享同一状态（D-001）。
-        /// </summary>
-        public override void MapComponentOnGUI()
-        {
-            if (Find.CurrentMap != map) return;
-
-            Rect rect = new Rect(8f, 40f, 150f, 26f);
-            bool show = Mod_PawnOwnership.ShowMarkers;
-
-            if (Widgets.ButtonText(rect, show ? "归属标记: 开" : "归属标记: 关"))
-            {
-                Mod_PawnOwnership.ShowMarkers = !show;
-                Mod_PawnOwnership.PersistSettings();
-            }
-
-            TooltipHandler.TipRegion(rect, "切换归属颜色块的显示。也可在「选项 - 模组设置」中调整。");
-        }
+        // 归属颜色块的显示开关已迁移到「所属」页签（Source/UI/ITab_Ownership.cs），
+        // 与调试开关放在一起；地图角落的浮动按钮已移除（D-001 更新）。
 
         public void DrawOwnershipMarkers()
         {

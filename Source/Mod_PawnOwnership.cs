@@ -45,7 +45,7 @@ namespace PawnOwnership
         }
 
         /// <summary>
-        /// 把当前设置落盘。地图角落的快捷按钮改完状态后需要调用。
+        /// 把当前设置落盘。「所属」页签里的开关改完状态后需要调用。
         /// </summary>
         internal static void PersistSettings()
         {
@@ -60,21 +60,13 @@ namespace PawnOwnership
 
         public override void DoSettingsWindowContents(Rect inRect)
         {
-            bool show = ShowMarkers;
-
             Listing_Standard listing = new Listing_Standard();
             listing.Begin(inRect);
-            listing.CheckboxLabeled(
-                "显示归属颜色块",
-                ref show,
-                "关闭后不再在蓝图 / 框架 / 物品上绘制归属颜色块。检查信息里的「所属」与「所属」页签不受影响。");
+            listing.Label(
+                "归属颜色块的显示开关已移至「所属」页签：\n"
+                + "选中物品 / 小人 / 动物后，在检视面板打开「所属」页签，"
+                + "开关与模组调试开关放在一起。");
             listing.End();
-
-            if (show != ShowMarkers)
-            {
-                ShowMarkers = show;
-                WriteSettings();
-            }
 
             base.DoSettingsWindowContents(inRect);
         }
