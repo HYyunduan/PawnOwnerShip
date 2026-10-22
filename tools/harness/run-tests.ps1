@@ -300,6 +300,11 @@ try {
             $got = Test-Path $waitFile
             if (-not $proc.HasExited) {
                 try { Stop-Process -Id $proc.Id -Force -ErrorAction Stop } catch { }
+
+            # Prepatcher 会重启游戏进程（新 PID），按命令行兜底清理，避免残留锁住 DLL
+            $leftovers = Get-CimInstance Win32_Process -Filter "Name='RimWorldWin64.exe'" -ErrorAction SilentlyContinue |
+                Where-Object { $_.CommandLine -and $_.CommandLine -match 'po\.selftest' }
+            foreach ($lp in $leftovers) { Stop-Process -Id $lp.ProcessId -Force -ErrorAction SilentlyContinue }
             }
 
             # 保留游戏日志便于事后排查

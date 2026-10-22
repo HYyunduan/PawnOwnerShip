@@ -232,6 +232,12 @@ catch {
     exit 1
 }
 finally {
+    foreach ($p in $script:procs) { Stop-TestProcess $p }
+    Start-Sleep -Milliseconds 800
+    # Prepatcher 会重启游戏进程（新 PID），按命令行兜底清理，避免残留锁住 DLL
+    $leftovers = Get-CimInstance Win32_Process -Filter "Name='RimWorldWin64.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -match 'po\.selftest' }
+    foreach ($lp in $leftovers) { Stop-Process -Id $lp.ProcessId -Force -ErrorAction SilentlyContinue }
     foreach ($cfg in $script:mpConfigs) {
         $bak = "$cfg.po-harness-backup"
         if (Test-Path $bak) { Copy-Item $bak $cfg -Force }
