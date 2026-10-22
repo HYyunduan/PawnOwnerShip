@@ -41,9 +41,11 @@ New-Item -ItemType Directory -Force -Path $hostDir, $clientDir | Out-Null
 $hostLog = Join-Path $work 'host.log'
 $clientLog = Join-Path $work 'client.log'
 
-# MP 的活动设置文件（workshop packageId 版本）
-$mpConfig = Join-Path $env:USERPROFILE 'AppData\LocalLow\Ludeon Studios\RimWorld by Ludeon Studios\Config\Mod_2606448745_Multiplayer.xml'
-$mpConfigBackup = "$mpConfig.po-harness-backup"
+# MP 的活动设置文件：不同版本下可能用 packageId（Mod_2606448745_Multiplayer.xml）
+# 或 mod 名（Mod_Multiplayer_Multiplayer.xml）命名，两个都处理，避免改到过期文件。
+$mpConfigDir = Join-Path $env:USERPROFILE 'AppData\LocalLow\Ludeon Studios\RimWorld by Ludeon Studios\Config'
+$mpConfigNames = @('Mod_Multiplayer_Multiplayer.xml', 'Mod_2606448745_Multiplayer.xml')
+$mpConfigs = @($mpConfigNames | ForEach-Object { Join-Path $mpConfigDir $_ } | Where-Object { Test-Path $_ })
 
 $script:steps = @()
 $script:procs = @()
@@ -57,10 +59,12 @@ function Add-Step {
 
 function Set-MpUsername {
     param([string]$Name)
-    if (-not (Test-Path $mpConfig)) { throw "找不到 MP 设置文件: $mpConfig" }
-    $c = Get-Content $mpConfig -Raw -Encoding UTF8
-    $c2 = [regex]::Replace($c, '<username>[^<]*</username>', ('<username>' + $Name + '</username>'))
-    [System.IO.File]::WriteAllText($mpConfig, $c2, (New-Object System.Text.UTF8Encoding($false)))
+    if ($script:mpConfigs.Count -eq 0) { throw "找不到 MP 设置文件（已查找: $($script:mpConfigNames -join ',')）" }
+    foreach ($cfg in $script:mpConfigs) {
+        $c = Get-Content $cfg -Raw -Encoding UTF8
+        $c2 = [regex]::Replace($c, '<username>[^<]*</username>', ('<username>' + $Name + '</username>'))
+        [System.IO.File]::WriteAllText($cfg, $c2, (New-Object System.Text.UTF8Encoding($false)))
+    }
 }
 
 function Stop-TestProcess {
@@ -111,14 +115,18 @@ try {
     Write-Host "work = $work"
 
     if (-not (Test-Path $GameExe)) { throw "找不到游戏可执行文件: $GameExe" }
-    if (-not (Test-Path $mpConfig)) { throw "找不到 Multiplayer 设置文件: $mpConfig" }
+    if ($script:mpConfigs.Count -eq 0) { throw "找不到 Multiplayer 设置文件（已查找: $($script:mpConfigNames -join ',')）" }
 
     # 备份 MP 设置（只备份一次，保留用户原始值）
-    if (-not (Test-Path $mpConfigBackup)) {
-        Copy-Item $mpConfig $mpConfigBackup -Force
-        Write-Host "已备份 MP 设置 -> $mpConfigBackup"
+    foreach ($cfg in $script:mpConfigs) {
+        $bak = "$cfg.po-harness-backup"
+        if (-not (Test-Path $bak)) {
+            Copy-Item $cfg $bak -Force
+            Write-Host "已备份 MP 设置 -> $bak"
+        }
     }
-    Add-Step 'backup-mp-settings' $true (Split-Path $mpConfig -Leaf)
+    $cfgNames = ($script:mpConfigs | ForEach-Object { Split-Path $_ -Leaf }) -join ','
+    Add-Step 'backup-mp-settings' $true $cfgNames
 
     # 清理上次残留的测试进程（只杀带测试参数的）
     $leftovers = Get-CimInstance Win32_Process -Filter "Name='RimWorldWin64.exe'" -ErrorAction SilentlyContinue |
@@ -224,7 +232,8 @@ catch {
     exit 1
 }
 finally {
-    foreach ($p in $script:procs) { Stop-TestProcess $p }
-    if (Test-Path $mpConfigBackup) { Copy-Item $mpConfigBackup $mpConfig -Force }
-    Write-Host '已结束测试进程并恢复 MP 设置'
+    foreach ($cfg in $script:mpConfigs) {
+        $bak = "$cfg.po-harness-backup"
+        if (Test-Path $bak) { Copy-Item $bak $cfg -Force }
+    }
 }

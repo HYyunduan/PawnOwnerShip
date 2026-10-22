@@ -40,22 +40,56 @@ namespace PawnOwnership.Patches
         }
         
         // ==========================================
-        // JobOnThing Prefix
+        // 派活前缀：按 __args 位置取参（不依赖参数名）
         // ==========================================
-        public static bool JobOnThing_Prefix(WorkGiver_Scanner __instance, Pawn pawn, Thing t, 
-            bool forced, ref Job __result)
+        // 为什么不用按名绑定：
+        //   Harmony 默认把补丁参数按"参数名"绑定到目标方法参数。原版各 WorkGiver 重写的参数名并不统一
+        //   （JobOnCell 有的叫 cell、有的叫 c；JobOnThing 有的叫 t、有的叫 thing），按名绑定会让这些
+        //   重写的拦截补丁静默失败。`__args` 是 Harmony 提供的"全部实参"数组，按位置取值与参数名无关，
+        //   对所有重写都成立。
+        //
+        // 关于"子类 override 调用 base"导致的重复执行：
+        //   若 override 与其 base 目标都被 patch，base 调用会让 prefix 再执行一次（全库 11 处，见
+        //   docs/DECISIONS.md D-006）。检查本身幂等、结果一致，只多一次字典/区域查询，属已知可接受行为。
+        //   下面的 _thingCheckSet/_cellCheckSet 只在本次 prefix 调用内生效（prefix 返回即释放），
+        //   **不能跨 base 调用去重**；它防的是检查逻辑内部的重入。
+
+        private static Pawn ArgPawn(object[] args)
         {
-            if (forced) return true;
-            if (t == null) return true;
-            
-            // 防重复检查
+            return args != null && args.Length > 0 ? args[0] as Pawn : null;
+        }
+
+        private static Thing ArgThing(object[] args)
+        {
+            return args != null && args.Length > 1 ? args[1] as Thing : null;
+        }
+
+        private static bool ArgForced(object[] args)
+        {
+            return args != null && args.Length > 2 && args[2] is bool b && b;
+        }
+
+        private static bool TryArgCell(object[] args, out IntVec3 cell)
+        {
+            cell = IntVec3.Invalid;
+            if (args == null || args.Length < 2) return false;
+            if (!(args[1] is IntVec3 value)) return false;
+            cell = value;
+            return true;
+        }
+
+        public static bool JobOnThing_Prefix(object[] __args, ref Job __result)
+        {
+            if (ArgForced(__args)) return true;
+
+            Pawn pawn = ArgPawn(__args);
+            Thing t = ArgThing(__args);
+            if (pawn == null || t == null) return true;
+
+            // 防重复检查：仅覆盖本次 prefix 调用栈（不跨 base 调用）
             var key = (pawn.thingIDNumber, t.thingIDNumber);
-            if (!_thingCheckSet.Add(key))
-            {
-                // 已经在检查中，跳过（子类调用 base 触发的）
-                return true;
-            }
-            
+            if (!_thingCheckSet.Add(key)) return true;
+
             try
             {
                 if (!CheckThingOwnership(pawn, t))
@@ -74,19 +108,17 @@ namespace PawnOwnership.Patches
         // ==========================================
         // HasJobOnThing Prefix
         // ==========================================
-        public static bool HasJobOnThing_Prefix(WorkGiver_Scanner __instance, Pawn pawn, Thing t, 
-            bool forced, ref bool __result)
+        public static bool HasJobOnThing_Prefix(object[] __args, ref bool __result)
         {
-            if (forced) return true;
-            if (t == null) return true;
-            
-            // 防重复检查
+            if (ArgForced(__args)) return true;
+
+            Pawn pawn = ArgPawn(__args);
+            Thing t = ArgThing(__args);
+            if (pawn == null || t == null) return true;
+
             var key = (pawn.thingIDNumber, t.thingIDNumber);
-            if (!_thingCheckSet.Add(key))
-            {
-                return true;
-            }
-            
+            if (!_thingCheckSet.Add(key)) return true;
+
             try
             {
                 if (!CheckThingOwnership(pawn, t))
@@ -105,21 +137,17 @@ namespace PawnOwnership.Patches
         // ==========================================
         // JobOnCell Prefix
         // ==========================================
-        // 注意：Harmony 按“参数名”绑定原方法参数，必须与 1.6 中的参数名逐字一致。
-        // WorkGiver_Scanner.JobOnCell(Pawn pawn, IntVec3 cell, bool forced) 的参数是 cell，
-        // 而 HasJobOnCell(Pawn pawn, IntVec3 c, bool forced) 的参数是 c，两者不同，不要统一。
-        public static bool JobOnCell_Prefix(WorkGiver_Scanner __instance, Pawn pawn, IntVec3 cell, 
-            bool forced, ref Job __result)
+        public static bool JobOnCell_Prefix(object[] __args, ref Job __result)
         {
-            if (forced) return true;
-            
-            // 防重复检查
+            if (ArgForced(__args)) return true;
+
+            Pawn pawn = ArgPawn(__args);
+            if (pawn == null) return true;
+            if (!TryArgCell(__args, out IntVec3 cell)) return true;
+
             var key = (pawn.thingIDNumber, cell.x, cell.z);
-            if (!_cellCheckSet.Add(key))
-            {
-                return true;
-            }
-            
+            if (!_cellCheckSet.Add(key)) return true;
+
             try
             {
                 if (!CheckCellOwnership(pawn, cell))
@@ -138,18 +166,17 @@ namespace PawnOwnership.Patches
         // ==========================================
         // HasJobOnCell Prefix
         // ==========================================
-        public static bool HasJobOnCell_Prefix(WorkGiver_Scanner __instance, Pawn pawn, IntVec3 c, 
-            bool forced, ref bool __result)
+        public static bool HasJobOnCell_Prefix(object[] __args, ref bool __result)
         {
-            if (forced) return true;
-            
-            // 防重复检查
+            if (ArgForced(__args)) return true;
+
+            Pawn pawn = ArgPawn(__args);
+            if (pawn == null) return true;
+            if (!TryArgCell(__args, out IntVec3 c)) return true;
+
             var key = (pawn.thingIDNumber, c.x, c.z);
-            if (!_cellCheckSet.Add(key))
-            {
-                return true;
-            }
-            
+            if (!_cellCheckSet.Add(key)) return true;
+
             try
             {
                 if (!CheckCellOwnership(pawn, c))
@@ -246,8 +273,9 @@ namespace PawnOwnership.Patches
         // ==========================================
         // JobOnThing Postfix - 检查工作目标区域归属
         // ==========================================
-        public static void JobOnThing_Postfix(Pawn pawn, ref Job __result)
+        public static void JobOnThing_Postfix(object[] __args, ref Job __result)
         {
+            Pawn pawn = ArgPawn(__args);
             if (__result == null) return;
             if (pawn == null || pawn.Map == null) return;
             
@@ -295,7 +323,7 @@ namespace PawnOwnership.Patches
         // 详见 docs/bug-crop-mismatch-investigation.md。
         public static IEnumerable<Thing> PotentialWorkThingsGlobal_Postfix(
             IEnumerable<Thing> __result, 
-            Pawn pawn)
+            object[] __args)
         {
             // 单机模式跳过
             if (!MP.enabled || !MP.IsInMultiplayer)
@@ -304,6 +332,7 @@ namespace PawnOwnership.Patches
             if (__result == null)
                 return null;
             
+            Pawn pawn = ArgPawn(__args);
             if (pawn == null || pawn.Map == null)
                 return __result;
             
@@ -358,7 +387,7 @@ namespace PawnOwnership.Patches
         // 提前物化会破坏 wantedPlantDef 的设值/清空时序，导致作物错配。
         public static IEnumerable<IntVec3> PotentialWorkCellsGlobal_Postfix(
             IEnumerable<IntVec3> __result, 
-            Pawn pawn)
+            object[] __args)
         {
             // 单机模式跳过
             if (!MP.enabled || !MP.IsInMultiplayer)
@@ -367,6 +396,7 @@ namespace PawnOwnership.Patches
             if (__result == null)
                 return null;
             
+            Pawn pawn = ArgPawn(__args);
             if (pawn == null || pawn.Map == null)
                 return __result;
             

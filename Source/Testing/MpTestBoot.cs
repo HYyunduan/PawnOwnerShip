@@ -108,22 +108,51 @@ namespace PawnOwnership.Testing
             }
         }
 
-        /// <summary>把本客户端玩家名改成指定值，便于区分主机与客户端。</summary>
+        /// <summary>
+        /// 把本进程玩家名改成指定值，便于区分主机与客户端。
+        ///
+        /// 注意：只改 MpSettings.username 是不够的——Multiplayer 在启动早期就调用 SetUsername()
+        /// 把名字固化到静态字段 Multiplayer.Client.Multiplayer.username 上（Steam 运行时取 Steam 昵称，
+        /// 同机双开两个进程会得到同一个名字，服务端报 UsernameAlreadyOnline）。
+        /// 所以这里必须同时覆盖那个静态字段。
+        /// </summary>
         public static bool TrySetUsername(string name)
         {
             try
             {
+                // 加进程内唯一后缀：同一存档可能残留上一轮测试的玩家名（如 MPClient），
+                // 直接复用旧名会被服务端判为 UsernameAlreadyOnline。
+                string uniqueName = name + "x" + (System.Diagnostics.Process.GetCurrentProcess().Id % 100000);
+
                 Assembly asm = MpAssembly();
                 if (asm == null) return false;
 
+                bool ok = false;
+
                 object settings = GetMpSettings(asm);
-                if (settings == null) return false;
+                if (settings != null)
+                {
+                    FieldInfo f = settings.GetType().GetField("username", AnyInstance);
+                    if (f != null)
+                    {
+                        f.SetValue(settings, uniqueName);
+                        ok = true;
+                    }
+                }
 
-                FieldInfo f = settings.GetType().GetField("username", AnyInstance);
-                if (f == null) { LastError = "MpSettings 没有 username 字段"; return false; }
+                // 真正被发送给服务端的名字（MP 启动时 SetUsername() 写入的静态字段）
+                Type mpType = asm.GetType("Multiplayer.Client.Multiplayer");
+                FieldInfo staticName = mpType != null ? mpType.GetField("username", AnyStatic) : null;
+                if (staticName != null)
+                {
+                    staticName.SetValue(null, uniqueName);
+                    ok = true;
+                }
 
-                f.SetValue(settings, name);
-                Log.Message("[PawnOwnership][MpTest] 玩家名已设为 " + name);
+                if (!ok) { LastError = "找不到 MpSettings.username 或 Multiplayer.username"; return false; }
+
+                Log.Message("[PawnOwnership][MpTest] 玩家名已设为 " + uniqueName
+                            + "（当前生效=" + CurrentUsername() + "）");
                 return true;
             }
             catch (Exception ex)

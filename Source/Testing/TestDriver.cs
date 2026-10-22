@@ -1100,7 +1100,7 @@ namespace PawnOwnership.Testing
                 // MP 门控的候选列表过滤：联机下应剔除他人归属的物品
                 var input = new List<Thing> { mine, foreign };
                 List<Thing> filtered = PatchHelpers
-                    .PotentialWorkThingsGlobal_Postfix(input, pawn)
+                    .PotentialWorkThingsGlobal_Postfix(input, new object[] { pawn })
                     .ToList();
 
                 bool hasMine = filtered.Contains(mine);
@@ -1139,12 +1139,12 @@ namespace PawnOwnership.Testing
 
                     var scanner = DefDatabase<WorkGiverDef>.GetNamed("ConstructDeliverResourcesToBlueprints", false)?.Worker as WorkGiver_Scanner;
                     Job dummy = null;
-                    buildBlockedUnforced = !PatchHelpers.JobOnThing_Prefix(scanner, pawn, blueprint, false, ref dummy);
-                    buildAllowedForced = PatchHelpers.JobOnThing_Prefix(scanner, pawn, blueprint, true, ref dummy);
+                    buildBlockedUnforced = !PatchHelpers.JobOnThing_Prefix(new object[] { pawn, blueprint, false }, ref dummy);
+                    buildAllowedForced = PatchHelpers.JobOnThing_Prefix(new object[] { pawn, blueprint, true }, ref dummy);
 
                     comp.SetOwner(blueprint, SelfOwner);
                     Job dummy2 = null;
-                    buildAllowedSameOwner = PatchHelpers.JobOnThing_Prefix(scanner, pawn, blueprint, false, ref dummy2);
+                    buildAllowedSameOwner = PatchHelpers.JobOnThing_Prefix(new object[] { pawn, blueprint, false }, ref dummy2);
                 }
                 finally
                 {

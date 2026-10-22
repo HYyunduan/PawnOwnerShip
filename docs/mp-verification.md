@@ -170,3 +170,10 @@ private static IEnumerable<Thing> FilterThingsLazily(IEnumerable<Thing> src, Paw
 
 影响文件：`Source/Patches/PatchHelpers.cs`（`PotentialWorkThingsGlobal_Postfix` / `PotentialWorkCellsGlobal_Postfix`）。
 改动很小，但属于产品逻辑修改，需维护者批准。
+
+## 运行前提（2026-10-22 补充）
+
+- **Steam 必须运行**：Steam 未启动时 Prepatcher 不生效、0Harmony 无法解析，本模组与 Multiplayer 都会在加载期报 `TypeLoadException`；此时 RimWorld 会把 `ModsConfig.xml` **重置为仅 Core+DLC**。
+- **ModsConfig 恢复**：被重置后用 `%TEMP%\ModsConfig.12mods.xml`（本机 12 个 mod 的备份）恢复，进游戏前确认 mod 列表。
+- **MP 设置文件**：Multiplayer 实际读写的文件可能是 `Config\Mod_Multiplayer_Multiplayer.xml`（旧版为 `Mod_2606448745_Multiplayer.xml`）；harness 现在同时备份并改写两个文件。
+- **同机双开用户名**：Steam 运行时 MP 优先用 Steam 昵称作用户名，两个进程会重名（`UsernameAlreadyOnline`）。`MpTestBoot.TrySetUsername` 现在会覆盖静态字段 `Multiplayer.Client.Multiplayer.username`，并自动附加进程号后缀保证唯一。

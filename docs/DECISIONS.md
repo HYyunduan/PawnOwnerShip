@@ -48,6 +48,18 @@
 - **支持范围**：Pawn（殖民者 / 动物等）与物品（`ThingCategory.Item`）；混合选择时逐对象按类型处理
 - **验证**：O12（批量设置 / 切换 / 清除 / 共同归属）、O13（多选时 `CurTabs` 含所属页签且 `IsVisible=true`）
 
+### D-006 动态补丁注册策略与可验证性
+
+- **状态**：已实现并验证（2026-10-22）
+- **背景**：原动态补丁对每个 WorkGiver 子类逐一尝试 patch 6 个方法。继承来的方法会被 Harmony 拒绝（620 条失败日志）；拦截 prefix 按参数名绑定，13 处重写因参数名不同（cell/c、t/thing、pawn/p）静默失效，其中 3 处造成真实过滤缺口（DoBill、CookFillHopper、GrowerSow 单机）。
+- **策略**：
+  1. 只 patch 该类自己声明的方法（`MethodBase.IsDeclaredMember()`），继承方法直接跳过（由父类自己处理）；
+  2. 拦截 prefix/postfix 统一用 `__args` 按位置取参，不再依赖原方法参数名；
+  3. 失败不再静默：`Log.Warning` + 计数写入自检报告（`dynamicPatch.failed`）；
+  4. 启动自检新增 `interceptors` 断言：逐条确认关键拦截 prefix 真的挂上，而不是只看"方法是否被 patch"（postfix 挂上也会进 patched 列表，这正是旧的误判来源）。
+- **不做**：不 patch 基类 `WorkGiver_Scanner.*`。基类实现只返回 null/空序列，无功能收益；且会让所有 override 的 `base.X()` 双重执行范围从 11 处扩散到上百处。
+- **已知行为**：全库 11 处 base 调用链（HaulGeneral→Haul、Deconstruct→RemoveBuilding、TendOther*→Tend 等）会让拦截 prefix 执行两次。检查幂等、结果一致，仅多一次字典/区域查询，接受。
+- **验证结果**：动态补丁 成功 339 / 跳过继承 620 / 失败 0；patchedMethods 255→266；cropprobe 8/9→9/9；ownership 13/13；markerprobe；联机门禁全 PASS。
 ## 三、待议
 
 ### D-003 归属标记的每帧绘制开销

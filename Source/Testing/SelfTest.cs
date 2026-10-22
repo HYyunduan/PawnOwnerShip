@@ -135,7 +135,56 @@ namespace PawnOwnership.Testing
             }
 
             methods.Sort(StringComparer.Ordinal);
-            healthy = methods.Count >= MinPatchedMethods;
+
+            // ---- 拦截器校验 ----
+            // 只统计"方法是否被 patch"是不够的：一个方法可能只挂上了 postfix，
+            // 而真正做拦截的是 prefix。这里逐条确认关键拦截 prefix 是否真的挂上
+            // （历史上 3 个真实过滤缺口就是从这种"看似已覆盖"里漏掉的）。
+            InterceptorSpec[] interceptorSpecs =
+            {
+                new InterceptorSpec(typeof(WorkGiver_HaulGeneral), "JobOnThing",
+                    new[] { typeof(Pawn), typeof(Thing), typeof(bool) }, "JobOnThing_Prefix"),
+                new InterceptorSpec(typeof(WorkGiver_DoBill), "JobOnThing",
+                    new[] { typeof(Pawn), typeof(Thing), typeof(bool) }, "JobOnThing_Prefix"),
+                new InterceptorSpec(typeof(WorkGiver_CookFillHopper), "JobOnThing",
+                    new[] { typeof(Pawn), typeof(Thing), typeof(bool) }, "JobOnThing_Prefix"),
+                new InterceptorSpec(typeof(WorkGiver_GrowerSow), "JobOnCell",
+                    new[] { typeof(Pawn), typeof(IntVec3), typeof(bool) }, "JobOnCell_Prefix"),
+            };
+
+            var interceptorLines = new List<string>();
+            bool interceptorsOk = true;
+            foreach (InterceptorSpec spec in interceptorSpecs)
+            {
+                MethodInfo target = AccessTools.Method(spec.ThingType, spec.Method, spec.ParamTypes);
+                bool attached = false;
+                string detail = "target=null";
+
+                if (target != null)
+                {
+                    HarmonyLib.Patches info = Harmony.GetPatchInfo(target);
+                    if (info != null)
+                    {
+                        int count = info.Prefixes.Count(x => x.owner == harmony.Id
+                            && x.PatchMethod != null && x.PatchMethod.Name == spec.PrefixName);
+                        attached = count > 0;
+                        detail = "prefixCount=" + count;
+                    }
+                    else
+                    {
+                        detail = "no patch info";
+                    }
+                }
+
+                if (!attached) interceptorsOk = false;
+                interceptorLines.Add("{"
+                    + "\"target\":" + Quote(spec.ThingType.Name + "." + spec.Method)
+                    + ",\"prefix\":" + Quote(spec.PrefixName)
+                    + ",\"attached\":" + (attached ? "true" : "false")
+                    + ",\"detail\":" + Quote(detail) + "}");
+            }
+
+            healthy = methods.Count >= MinPatchedMethods && interceptorsOk;
 
             var sb = new StringBuilder();
             sb.Append("{\n");
@@ -148,6 +197,17 @@ namespace PawnOwnership.Testing
             sb.Append("  \"prefixes\": ").Append(prefixes).Append(",\n");
             sb.Append("  \"postfixes\": ").Append(postfixes).Append(",\n");
             sb.Append("  \"transpilers\": ").Append(transpilers).Append(",\n");
+            sb.Append("  \"interceptorsOk\": ").Append(interceptorsOk ? "true" : "false").Append(",\n");
+            sb.Append("  \"dynamicPatch\": {\"succeeded\": ").Append(Patches.HarmonyDynamicPatches.SucceededCount)
+              .Append(", \"skippedInherited\": ").Append(Patches.HarmonyDynamicPatches.SkippedInheritedCount)
+              .Append(", \"failed\": ").Append(Patches.HarmonyDynamicPatches.FailedCount).Append("},\n");
+            sb.Append("  \"interceptors\": [");
+            for (int i = 0; i < interceptorLines.Count; i++)
+            {
+                if (i > 0) sb.Append(", ");
+                sb.Append(interceptorLines[i]);
+            }
+            sb.Append("],\n");
             sb.Append("  \"methods\": [");
             for (int i = 0; i < methods.Count; i++)
             {
@@ -158,6 +218,23 @@ namespace PawnOwnership.Testing
             sb.Append("}\n");
 
             return sb.ToString();
+        }
+
+        /// <summary>拦截器校验项：某个 WorkGiver 方法上是否真的挂上了指定的拦截 prefix。</summary>
+        private sealed class InterceptorSpec
+        {
+            public readonly Type ThingType;
+            public readonly string Method;
+            public readonly Type[] ParamTypes;
+            public readonly string PrefixName;
+
+            public InterceptorSpec(Type thingType, string method, Type[] paramTypes, string prefixName)
+            {
+                ThingType = thingType;
+                Method = method;
+                ParamTypes = paramTypes;
+                PrefixName = prefixName;
+            }
         }
 
         private static string SafeVersion()
