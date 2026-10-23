@@ -1,56 +1,76 @@
 # PawnOwnership
 
-**RimWorld 多人联机物品归属追踪 Mod**
+**RimWorld 1.6 多人联机归属追踪 Mod**
+
+在 RimWorld 多人联机（[Multiplayer](https://steamcommunity.com/sharedfiles/filedetails/?id=2606448745)）环境下追踪殖民者、动物、物品、建筑与区域/格子的归属，让不同玩家的工作互不干扰。单机同样可用（用于区分归属与限制工作）。
 
 ## 功能概述
 
-在 RimWorld 多人联机（Multiplayer Mod）环境下，追踪物品、建筑、蓝图的归属权，防止玩家之间互相干扰工作。
+### 1. 归属指派与查看（「所属」页签）
 
-### 核心功能
+- 选中殖民者 / 动物 / 物品，在检查面板的「所属」页签查看当前归属玩家；
+- 点「更改所属」选择玩家或清除归属；
+- 页签内同时提供 **显示设置**（归属颜色块开关）与 **调试设置**（模组 Debug，跟随游戏开发者模式或强制开关）。
 
-1. **物品归属追踪**
-   - 追踪物品、建筑、蓝图、框架的归属
-   - 归属信息随物品销毁/产出自动继承
+### 2. 多选批量更改
 
-2. **工作过滤**
-   - 小人只处理属于自己的物品
-   - 搬运材料时只搬运归属自己的蓝图
-   - 存储区归属过滤
+- 框选多个殖民者 / 动物 / 物品，一次性批量设置或清除归属；
+- 混合选择时只处理支持归属的对象；
+- 批量逻辑与单选共用同一实现，结果一致。
 
-3. **连锁挖矿支持**
-   - 支持矿脉连锁开采的归属继承
-   - 自动将新开采的格子归属设为当前玩家
+### 3. 按归属限制工作（工作过滤）
 
-4. **多人同步**
-   - 延迟同步队列，避免 MP 同步问题
-   - 支持 Zone、Thing、Cell 的归属同步
+- 工作分配前检查 Thing / Zone / Cell 归属，他人拥有的对象不会被派活；
+- 覆盖播种、收割、建造（蓝图 / 框架）、搬运、做饭 / 装料、存储区等路径；
+- **强制命令可越过限制**（征召 / 强制指派仍可让小人执行）。
+
+### 4. 归属标记
+
+- 在蓝图、框架、物品上绘制归属颜色块（颜色对应玩家）；
+- 可在「所属」页签的显示设置中关闭。
+
+### 5. 归属继承
+
+- 物品销毁产出、连锁挖矿、蓝图建造完成等场景自动继承归属；
+- 归属随物品销毁 / 产出链路传递，避免归属丢失。
+
+### 6. 多人同步
+
+- 通过 `[SyncMethod]` 同步 Thing / Zone / Cell 归属变更；
+- 延迟同步队列避免联机同步问题。
 
 ---
 
 ## 安装
 
-1. 确保已安装 [Multiplayer Mod](https://steamcommunity.com/sharedfiles/filedetails/?id=1753506840)
-2. 将本 Mod 放入 RimWorld Mods 文件夹
-3. 在 Mod 管理器中启用 PawnOwnership
+1. 安装 RimWorld **1.6**；
+2. 订阅并启用 [Multiplayer](https://steamcommunity.com/sharedfiles/filedetails/?id=2606448745)（`rwmt.multiplayer`，其所需前置请一并启用）；
+3. 订阅 / 启用 **殖民者所有权**，并确保它在 Mod 列表中排在 Multiplayer **之后**。
 
 ---
 
 ## 使用方法
 
-### 调试模式
+### 「所属」页签
 
-- 默认跟随游戏开发者模式（`Prefs.DevMode`）
-- 可通过 UI 按钮手动开启/关闭调试日志
+| 操作 | 说明 |
+|------|------|
+| 单选对象 | 查看当前归属 →「更改所属」→ 选择玩家 / 清除 |
+| 多选对象 | 「批量更改所属」→ 一次应用到所有支持的对象 |
+| 显示设置 | `显示归属颜色块` 开关（关闭后不再绘制色块，检查信息与本页签不受影响） |
+| 调试设置 | 模组 Debug：跟随游戏开发者模式，或手动强制开 / 关 |
 
 ### 归属规则
 
-| 类型 | 归属来源 |
+| 对象 | 归属来源 |
 |------|----------|
-| 物品 | 工作者产出、销毁继承 |
-| 建筑 | 蓝图建造完成 |
-| 蓝图 | 玩家放置时记录 |
-| 存储区 | 玩家创建时记录 |
-| 采矿格子 | 玩家标记时记录 |
+| 殖民者 / 动物 | 玩家在「所属」页签手动设置 |
+| 物品 | 工作者产出 / 建造、销毁继承、玩家手动更改 |
+| 蓝图 / 框架 | 放置玩家 |
+| 区域（如种植区） | 创建玩家（区域注册时记录） |
+| 采矿格子 | 标记采矿的玩家（连锁挖矿继承） |
+
+> 区域 / 格子的归属目前只在创建 / 标记时记录，暂未提供修改入口；物品与小人的归属可在「所属」页签随时更改。
 
 ---
 
@@ -60,63 +80,46 @@
 
 ```
 Source/
-├── Mod_PawnOwnership.cs           # Mod 入口
-├── HarmonyPatches.cs              # 动态 Patch 注册
-├── MapComponent_PawnOwnership.cs  # 核心组件
-├── PatchHelpers.cs                # 辅助方法
-└── patches/
-    ├── Patch_DesignatorManager.cs           # Designation 归属
-    ├── Patch_ZoneManager.cs                 # Zone 归属
-    ├── Patch_Thing.cs                       # Blueprint/Frame 归属继承
-    ├── Patch_WorkGiver_ConstructDeliverResources.cs  # 搬运过滤
-    ├── Patch_Designator_Build.cs            # Blueprint 放置
-    ├── Patch_Map.cs                         # 归属标志绘制
-    ├── Patch_TickManager.cs                 # 延迟同步处理
-    ├── Patch_GenLeaving.cs                  # 销毁产出继承
-    ├── Patch_Pawn_JobTracker.cs             # 工作者栈
-    ├── Patch_Pawn.cs                        # Pawn 进入地图同步
-    ├── Patch_StoreUtility.cs                # 存储区过滤
-    └── Patch_JobDriver_Mine.cs              # 连锁挖矿
+├── Mod_PawnOwnership.cs              # Mod 入口 / 设置
+├── MapComponent_PawnOwnership.cs     # 核心组件：归属存取、同步、标记绘制
+├── PawnOwnershipExtension.cs         # Pawn/Thing 归属扩展方法
+├── PawnOwnershipWorldComponent.cs    # 世界级（跨地图）归属数据
+├── PawnOwnershipModSettings.cs       # 本地设置（如颜色块开关）
+├── UI/
+│   ├── ITab_Ownership.cs             # 「所属」页签（单选 / 多选 / 显示 / 调试）
+│   ├── Dialog_SetOwner.cs            # 更改归属对话框（单个 / 批量）
+│   └── OwnershipBulk.cs              # 批量归属逻辑（UI 与测试共用）
+├── Patches/                          # Harmony 静态补丁 + 动态补丁注册
+└── Testing/                          # 启动自检与实机测试驱动（仅测试参数下运行）
 ```
 
-### Harmony Patch 列表
+### 静态补丁（PatchAudit 全量审计 31 条）
 
-| 目标类 | 方法 | 类型 | 功能 |
-|--------|------|------|------|
-| DesignationManager | AddDesignation | Postfix | 记录标记归属 |
-| DesignationManager | RemoveDesignation | Prefix | 清除标记归属 |
-| ZoneManager | RegisterZone | Postfix | 记录存储区归属 |
-| ZoneManager | DeregisterZone | Prefix | 清除存储区归属 |
-| Thing | DeSpawn | Prefix | 保存蓝图归属到暂存 |
-| Thing | SpawnSetup | Postfix | 从暂存恢复归属 |
-| WorkGiver_ConstructDeliverResources | IsNewValidNearbyNeeder | Postfix | 过滤非归属蓝图 |
-| Designator_Build | DesignateSingleCell | Postfix | 记录蓝图归属 |
-| Map | MapUpdate | Postfix | 绘制归属标志 |
-| TickManager | TickManagerUpdate | Postfix | 处理延迟同步队列 |
-| GenLeaving | DoLeavingsFor | Prefix+Postfix | 销毁产出归属继承 |
-| Pawn_JobTracker | StartJob | Postfix | 工作者栈入栈 |
-| Pawn_JobTracker | EndCurrentJob | Postfix | 工作者栈出栈 |
-| Pawn | SpawnSetup | Postfix | 同步携带物品归属 |
-| StoreUtility | TryFindBestBetterStoreCellForWorker | Prefix | 存储区归属过滤 |
-| JobDriver_Mine | DoDamage | Prefix+Postfix | 连锁挖矿归属传递 |
+| 领域 | 目标方法 |
+|------|----------|
+| 归属记录 / 继承 | `DesignationManager.Add/RemoveDesignation`、`Thing.DeSpawn/SpawnSetup`、`ZoneManager.Register/DeregisterZone`、`Designator_Build.DesignateSingleCell`、`GenSpawn.Spawn`、`GenLeaving.DoLeavingsFor` |
+| 工作过滤 | `WorkGiver_ConstructDeliverResources.IsNewValidNearbyNeeder`、`StoreUtility.TryFindBestBetterStoreCellForWorker`、`HaulAIUtility.PawnCanAutomaticallyHaul`、`GenClosest.ClosestThingReachable`、`FoodUtility.SpawnedFoodSearchInnerScan`、`JobDriver.DriverTickInterval` |
+| 连锁挖矿 | `JobDriver_Mine.DoDamage` |
+| 同步 | `TickManager.TickManagerUpdate` |
+| 信息 / UI | `Thing.GetInspectString`、`Thing.GetInspectTabs`、`MainTabWindow_Inspect.CurTabs` |
 
-### 动态 Patch
+### 动态补丁（WorkGiver_Scanner 及其子类）
 
-针对 `WorkGiver_Scanner` 子类的动态 Patch：
-- `JobOnThing` - 工作分配前检查归属
-- `HasJobOnThing` - 工作可用性检查
-- `JobOnCell` - 格子工作分配
-- `HasJobOnCell` - 格子工作可用性
-- `PotentialWorkThingsGlobal` - 候选物品过滤
-- `PotentialWorkCellsGlobal` - 候选格子过滤
+- 目标：`WorkGiver_Scanner` 子类**自己声明**的 6 个方法：
+  `JobOnThing` / `HasJobOnThing` / `JobOnCell` / `HasJobOnCell` / `PotentialWorkThingsGlobal` / `PotentialWorkCellsGlobal`；
+- 策略：
+  - 只给该类自己实现的方法打补丁，继承来的方法直接跳过（由父类处理）；
+  - 拦截前缀统一用 Harmony 的 `__args` **按位置取参**，不依赖目标方法的参数名（原版各重写参数名不一致）；
+  - 基类 `WorkGiver_Scanner` 不打补丁（其实现只返回空值，无功能收益，且避免 base 调用链重复执行）；
+- 失败不再静默：补丁失败会写 Warning 并计入启动自检报告；自检还会逐条断言关键拦截 prefix 是否真的挂载。
 
 ---
 
 ## 依赖
 
-- RimWorld 1.6
-- Multiplayer Mod
-- HarmonyLib
+- RimWorld **1.6**
+- **Multiplayer**（Steam Workshop `2606448745`，packageId `rwmt.multiplayer`）
+- Harmony / Prepatcher（Multiplayer 所需前置）
 
 ---
 
@@ -130,58 +133,82 @@ dotnet build Source/PawnOwnership.csproj
 
 ---
 
-## 许可证
+## 测试与门禁
 
-MIT License
+### 门禁命令
+
+```powershell
+# L0 静态补丁审计 + 编译
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/harness/run-tests.ps1
+
+# L0 + 构建部署 + 启动自检（运行时补丁挂载断言）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/harness/run-tests.ps1 -Deploy -Launch
+
+# 实机场景
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/harness/run-tests.ps1 -Deploy -Launch -Scenario ownership -SaveName '<存档名>'
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/harness/run-tests.ps1 -Deploy -Launch -Scenario cropprobe -SaveName '<存档名>'
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/harness/run-tests.ps1 -Deploy -Launch -Scenario markerprobe -SaveName '<存档名>'
+
+# 双客户端联机门禁（需要 Steam 运行）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/harness/run-mp-tests.ps1 -SaveName '<存档名>'
+```
+
+- L0：静态审计全部补丁参数名是否与目标方法一致（31 条）。
+- L1：启动自检（`selftest.json`）——运行时真实挂载的方法数、prefix/postfix 数、动态补丁成功/跳过/失败计数，以及关键拦截器是否挂载。
+- 实机场景：`ownership`（13 例归属用例）、`cropprobe`（9 例作物用例）、`markerprobe`（标记绘制）等。
+- 联机门禁：主机 + 客户端双进程，覆盖搬运过滤、建造归属、种植区归属、作物匹配等断言。
+- 报告产物：`artifacts/gate-report.json`、`artifacts/mp-report.json`。
+
+### 当前验证状态（2026-10-23）
+
+| 项目 | 结果 |
+|------|------|
+| L0 静态审计 | 31/31 通过 |
+| L1 启动自检 | `healthy=true`，挂载方法 266 个；动态补丁成功 339 / 跳过继承 620 / 失败 0；拦截器 4/4 挂载 |
+| ownership 归属用例 | 13/13 通过 |
+| cropprobe 作物用例 | 9/9 通过 |
+| markerprobe 标记绘制 | `ownedThings=50`，3 张截图非空 |
+| 双客户端联机门禁 | PASS（搬运 / 建造 / 种植区 / 归属过滤 + 作物匹配） |
+
+### 验证边界
+
+- L1 是运行时挂载与拦截器断言，不能替代每个具体业务路径的测试；
+- 实机场景覆盖核心链路，但发布前仍建议人工过一遍多人存档；
+- 联机测试要求 **Steam 运行**（Prepatcher 依赖），且同机双开需要唯一用户名（测试脚本已自动处理）。
+
+---
+
+## 已知限制
+
+- 区域 / 格子归属只在创建 / 标记时记录，暂无 UI 修改入口；
+- 极少数通过 `base.X()` 调用的链路会重复执行一次归属检查（幂等，无行为差异）；
+- 归属过滤对**强制命令**放行，这是联机协作的预期行为。
 
 ---
 
 ## 更新日志
 
+### v0.9.2
+
+- 「所属」页签支持多选：框选多个对象，批量设置或清除归属；
+- 新增归属颜色块显示开关（移入「所属」页签，与调试设置同区块）；
+- 修复联机播种作物错配：种植区选水稻却种成土豆；
+- 补齐归属过滤覆盖：做饭 / 装料、单机播种等路径；
+- 动态补丁稳定化：只给声明方法打补丁、拦截补丁不依赖参数名，启动自检可断言拦截器是否挂载。
+
 ### v0.9.1
-- 物品归属追踪
-- 连锁挖矿支持
+
+- 物品归属追踪；
+- 连锁挖矿支持。
 
 ### v0.9.0
-- 初始版本
-- 工作过滤
-- 多人同步
+
+- 初始版本；
+- 工作过滤；
+- 多人同步。
 
 ---
 
-## 测试与门禁
+## 许可证
 
-### 归属颜色块开关
-
-- 入口：Mod 设置页复选框、地图左上按钮，二者共享同一状态。
-- 状态存于本地 `ModSettings`，不参与 MP 同步，各客户端独立。
-- 仅控制颜色块显示，不影响 InspectString 与 ITab。
-
-### 门禁命令
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/harness/run-tests.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/harness/run-tests.ps1 -Deploy -Launch
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/harness/run-tests.ps1 -Deploy -Launch -Scenario loadsave -SaveName '<存档名>'
-```
-
-- L0：仅对补丁参数名做静态审计。
-- L1：`-Deploy -Launch`，仅作数量阈值冒烟。
-- L2：`-Deploy -Launch -Scenario loadsave -SaveName '<存档名>'`，实机载入存档。
-- 参数前置限制：`-Scenario` 要求 `-Launch`，`-Launch` 要求 `-Deploy`，`loadsave` 要求 `-SaveName`；与 31 条审计同为固定门槛。
-- 部署会写入游戏目录；测试会强制结束自己启动的进程。真实测试建议使用独立 `savedatafolder` 与存档副本，并确保 `Prefs.runInBackground=True`。
-- 本轮真实 L2 已通过（2026-10-17）：`1.6.4871` 加载存档副本 `acceptance`，L1 挂载 255 个方法；绘制数开/关/恢复为 `5/0/5`，三张截图为非空 PNG，退出码 0；原 DLL 已恢复，原存档配置哈希未变。证据在 `artifacts/runtime-acceptance/`（已忽略，不提交）。
-
-### 回归命令
-
-```powershell
-dotnet run --project tools/harness/tests/driver/DriverRegression.csproj -- artifacts/qa-driver-run
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/harness/tests/test-gate.ps1
-```
-
-### 验证边界
-
-- stub 测试不证明真实渲染，也不证明双客户端同步。
-- L1 只是数量阈值冒烟，不能证明每个补丁有效。
-- L0 只做参数名静态审计，不执行补丁逻辑。
-- 尚未做双客户端同步与设置持久化人工验收；日志中的动态 patch 继承注册失败和 `InputLegacyModule` 反射依赖错误为既有观察项，本轮未归因。
+MIT License
