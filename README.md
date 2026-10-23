@@ -2,6 +2,8 @@
 
 **RimWorld 1.6 多人联机归属追踪 Mod**
 
+当前版本：**v0.9.3**（未发布） · 上一版：v0.9.2
+
 在 RimWorld 多人联机（[Multiplayer](https://steamcommunity.com/sharedfiles/filedetails/?id=2606448745)）环境下追踪殖民者、动物、物品、建筑与区域/格子的归属，让不同玩家的工作互不干扰。单机同样可用（用于区分归属与限制工作）。
 
 ## 功能概述
@@ -188,13 +190,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/harness/run-mp-tests.p
 
 ## 更新日志
 
-### v0.9.2
+### v0.9.3（当前版本 · 未发布）
 
-- 「所属」页签支持多选：框选多个对象，批量设置或清除归属；
+- 「所属」页签支持多选：框选多个殖民者 / 动物 / 物品，批量设置或清除归属；
 - 新增归属颜色块显示开关（移入「所属」页签，与调试设置同区块）；
 - 修复联机播种作物错配：种植区选水稻却种成土豆；
 - 补齐归属过滤覆盖：做饭 / 装料、单机播种等路径；
-- 动态补丁稳定化：只给声明方法打补丁、拦截补丁不依赖参数名，启动自检可断言拦截器是否挂载。
+- 动态补丁稳定化：只给声明方法打补丁、拦截补丁不依赖参数名，启动自检可断言拦截器是否挂载；
+- 测试门禁完善：新增双客户端联机门禁、启动自检拦截器断言、测试残留进程清理。
+
+### v0.9.2
+
+- 归属标记可见性验证（markerprobe 探针，确认标记正常渲染）；
+- 作物生效性自动化测试（cropprobe 8/9，C08 暴露 `WorkGiver_GrowerSow.JobOnCell` 未绑定）；
+- 联机测试方案与场景钩子（sowobserve 归属观察场景，确认单机过滤恒真放行）；
+- PatchAudit 增加 `--types` 模式；
+- 文档：marker-verification / crop-verification / plan-mp-harness。
 
 ### v0.9.1
 
